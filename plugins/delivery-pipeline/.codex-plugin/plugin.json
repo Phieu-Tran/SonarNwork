@@ -1,0 +1,25 @@
+{
+  "name": "delivery-pipeline",
+  "version": "0.1.0",
+  "description": "A gated define-plan-build-verify-review-ship workflow for reliable software delivery.",
+  "author": {
+    "name": "Local developer"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Delivery Pipeline",
+    "shortDescription": "Gated workflow from idea to validated release.",
+    "longDescription": "Delivery Pipeline provides six reusable skills for specification, technical planning, implementation, verification, QA review, and release packaging.",
+    "developerName": "Local developer",
+    "category": "Productivity",
+    "capabilities": [
+      "Specification",
+      "Planning",
+      "Implementation",
+      "Verification",
+      "Review",
+      "Release"
+    ],
+    "defaultPrompt": "Guide this change through the delivery pipeline, starting at the earliest incomplete gate."
+  }
+}

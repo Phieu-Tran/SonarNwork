@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review"
+  short_description: "Apply the QA and release-readiness gate"
+  default_prompt: "Use $review to compare the implementation with its spec and report release-blocking findings."

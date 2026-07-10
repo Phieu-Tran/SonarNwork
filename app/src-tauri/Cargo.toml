@@ -1,0 +1,20 @@
+[package]
+name = "sonarnwork-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+name = "sonarnwork_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+sonar-core = { path = "../../crates/sonar-core" }
+sonar-tools = { path = "../../crates/sonar-tools" }
+tauri.workspace = true

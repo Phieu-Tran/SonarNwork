@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan"
+  short_description: "Turn an approved spec into a technical plan"
+  default_prompt: "Use $plan to convert the approved specification into an implementation and verification plan."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Build"
+  short_description: "Implement an approved technical plan safely"
+  default_prompt: "Use $build to implement the approved plan while preserving repository boundaries and scope."
