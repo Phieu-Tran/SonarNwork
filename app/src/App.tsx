@@ -17,7 +17,6 @@ import {
   SquareTerminal,
   Terminal,
 } from "lucide-react";
-import appIcon from "./assets/sonarnwork-icon.png";
 import {
   defaultPortForProbe,
   extractPort,
@@ -1325,8 +1324,10 @@ export default function App() {
       <section className="appWindow">
         <header className="appTopbar">
           <div className="brandMark">
-            <span className="brandIcon">
-              <img src={appIcon} alt="" />
+            <span className="brandIcon" aria-hidden="true">
+              <span className="brandNode" />
+              <span className="brandWave brandWaveOne" />
+              <span className="brandWave brandWaveTwo" />
             </span>
             <strong>{info?.name ?? "SonarNwork"}</strong>
           </div>

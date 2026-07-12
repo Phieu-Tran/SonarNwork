@@ -56,14 +56,14 @@ summary:focus-visible {
   --text: #161512;
   --muted: #716a61;
   --faint: #9a9186;
-  --accent: #c4573d;
+  --accent: #d65f22;
   --accent-2: #0987b7;
-  --accent-soft: #ffe0da;
+  --accent-soft: #ffe4d1;
   --accent-2-soft: #dff3fb;
   --local-accent: #df762e;
   --local-soft: #ffe5d4;
-  --outbound-accent: #c4573d;
-  --outbound-soft: #ffe0da;
+  --outbound-accent: #d65f22;
+  --outbound-soft: #ffe4d1;
   --public-accent: #1f8b5c;
   --public-soft: #dcf3e7;
   --lookup-accent: #0987b7;
@@ -95,14 +95,14 @@ summary:focus-visible {
   --text: #f8f4ea;
   --muted: #aaa196;
   --faint: #70685e;
-  --accent: #ee8067;
+  --accent: #ff944d;
   --accent-2: #21c3ec;
-  --accent-soft: #4a211d;
+  --accent-soft: #472514;
   --accent-2-soft: #102f3a;
   --local-accent: #f09a55;
   --local-soft: #3d2415;
-  --outbound-accent: #ee8067;
-  --outbound-soft: #4a211d;
+  --outbound-accent: #ff944d;
+  --outbound-soft: #472514;
   --public-accent: #63d08f;
   --public-soft: #153622;
   --lookup-accent: #21c3ec;
@@ -203,22 +203,64 @@ summary:focus-visible {
 
 .brandMark {
   min-width: 0;
-  gap: 8px;
+  gap: 7px;
+  min-height: 28px;
+  border: 1px solid color-mix(in srgb, var(--workflow-accent) 20%, var(--line));
+  border-radius: 7px;
+  padding: 0 8px 0 6px;
   color: var(--text);
+  background: color-mix(in srgb, var(--workflow-soft) 66%, transparent);
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--workflow-accent) 72%, transparent);
 }
 
 .brandIcon {
+  position: relative;
   display: grid;
-  width: 13px;
-  height: 13px;
+  flex: 0 0 auto;
+  width: 17px;
+  height: 17px;
   place-items: center;
   overflow: hidden;
-  border-radius: 3px;
-  background: var(--workflow-accent);
+  border: 1px solid color-mix(in srgb, var(--workflow-accent) 48%, var(--surface-3));
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--workflow-accent) 16%, var(--surface-3));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--workflow-soft) 72%, transparent);
 }
 
-.brandIcon img {
-  display: none;
+.brandNode {
+  position: absolute;
+  left: 4px;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--workflow-accent);
+  box-shadow:
+    4px -4px 0 -1px var(--workflow-accent),
+    8px 1px 0 -1px var(--workflow-accent);
+}
+
+.brandWave {
+  position: absolute;
+  border: 1.6px solid var(--workflow-accent);
+  border-left: 0;
+  border-radius: 0 999px 999px 0;
+}
+
+.brandWaveOne {
+  right: 3px;
+  top: 5px;
+  width: 7px;
+  height: 7px;
+  opacity: 0.9;
+}
+
+.brandWaveTwo {
+  right: 1px;
+  top: 3px;
+  width: 11px;
+  height: 11px;
+  opacity: 0.42;
 }
 
 .brandMark strong {
