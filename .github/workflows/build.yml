@@ -1,0 +1,100 @@
+name: Build
+
+on:
+  push:
+    branches: ["main"]
+    tags: ["v*"]
+  pull_request:
+    branches: ["main"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  windows:
+    name: Windows desktop and CLI
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+          cache-dependency-path: app/pnpm-lock.yaml
+
+      - name: Install frontend dependencies
+        working-directory: app
+        run: pnpm install --frozen-lockfile
+
+      - name: Test Rust workspace
+        run: cargo test --workspace
+
+      - name: Test frontend
+        working-directory: app
+        run: pnpm test
+
+      - name: Build frontend
+        working-directory: app
+        run: pnpm build
+
+      - name: Build CLI
+        run: cargo build -p sonar-cli --release
+
+      - name: Build desktop app
+        working-directory: app
+        run: pnpm tauri build
+
+      - name: Package portable test build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = "target/release/sonarnwork-portable"
+          $zip = "target/release/SonarNwork-${{ github.run_number }}-${{ github.sha }}-windows-x64-portable.zip"
+
+          Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $stage | Out-Null
+
+          Copy-Item "target/release/sonarnwork.exe" $stage
+          Copy-Item "target/release/sonarnwork-app.exe" $stage
+
+          Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sonarnwork-windows-x64
+          if-no-files-found: error
+          path: |
+            target/release/SonarNwork-*-windows-x64-portable.zip
+            target/release/sonarnwork.exe
+            target/release/sonarnwork-app.exe
+            target/release/bundle/**
