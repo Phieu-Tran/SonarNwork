@@ -2458,3 +2458,16 @@ fn reachability_target(entity: &Entity) -> (String, u16) {
         _ => (target_for_command(entity), 443),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::parse_entity_guess;
+
+    #[test]
+    fn reachability_target_uses_domain_port_once() {
+        let entity = parse_entity_guess("example.com:443").unwrap();
+
+        assert_eq!(reachability_target(&entity), ("example.com".into(), 443));
+    }
+}

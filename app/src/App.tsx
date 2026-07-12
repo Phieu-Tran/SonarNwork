@@ -91,8 +91,6 @@ type CommandPreview = {
   program: string;
   args: string[];
   display: string;
-  powershell: string;
-  cmd: string;
 };
 
 type NetworkSummary = {
@@ -119,7 +117,12 @@ type RemoteVantagePlan = {
   warning?: string | null;
 };
 
-type ToolInstallStrategy = "auto_download" | "detect_only" | "api_only";
+type ToolInstallStrategy =
+  | "auto_download"
+  | "detect_only"
+  | "api_only"
+  | "system_installer"
+  | "managed_download";
 type ToolRisk = "passive" | "safe_remote_vantage" | "active_scanner" | "intrusive_scanner";
 type ToolCategory =
   | "path_diagnostics"
@@ -129,6 +132,17 @@ type ToolCategory =
   | "vuln_scanning"
   | "remote_vantage"
   | "local_inspection";
+type ScannerProfileId =
+  | "fast"
+  | "version"
+  | "deep"
+  | "udp_quick"
+  | "safe"
+  | "http_exposure"
+  | "known_vulns"
+  | "full";
+
+type ScannerPortsId = "top" | "all" | "custom";
 
 type ToolUpdateInfo = {
   source_label: string;
@@ -146,6 +160,9 @@ type ManagedToolDescriptor = {
   risk: ToolRisk;
   category: ToolCategory;
   capabilities: string[];
+  target_kinds: string[];
+  interactions: string[];
+  scope_requirement: "none" | "active_target" | "intrusive_target";
   default_enabled: boolean;
   notes: string;
   update: ToolUpdateInfo;
@@ -159,6 +176,47 @@ type ToolUpdatePlan = {
   latest_url: string;
   update_supported: boolean;
   update_note: string;
+};
+
+type ToolRuntimeStatus = {
+  tool_id: string;
+  available: boolean;
+  executable?: string | null;
+  version?: string | null;
+  error?: string | null;
+};
+
+type ToolLifecyclePlan = {
+  tool_id: string;
+  install_strategy: ToolInstallStrategy;
+  installed: boolean;
+  install_supported: boolean;
+  update_supported: boolean;
+  managed: boolean;
+  action_url?: string | null;
+  note: string;
+};
+
+type ScannerRunView = {
+  summary: ProbeLiveSummary;
+  output: {
+    summary?: string | null;
+    summary_rows: SummaryRow[];
+    warnings: ProbeWarning[];
+    raw?: unknown;
+  };
+};
+
+type NmapOpenPortView = {
+  port: number;
+  proto: string;
+  service: string;
+  detail: string;
+};
+
+type NmapHostView = {
+  host: string;
+  ports: NmapOpenPortView[];
 };
 
 type ProbeLiveEvent = {
@@ -200,13 +258,26 @@ type IngressReadinessItem = {
   actionProbeId?: string;
 };
 
-type TerminalShell = "powershell" | "cmd";
 type ThemeMode = "light" | "dark";
 
 const DEFAULT_WORKFLOW_ID = "internet_path";
 const DEFAULT_PROBE_ID = "public.egress_check";
 
 const SUGGESTED_TARGETS = new Set(["", "1.1.1.1", "example.com", "example.com:443"]);
+const LOCAL_DIRECTION_PROBE_IDS = new Set([
+  "public.egress_check",
+  "dns.leak_check",
+  "dns.lookup",
+  "connectivity.ping",
+  "connectivity.traceroute",
+  "connectivity.fast_trace",
+  "connectivity.mtr",
+  "connectivity.path_mtu",
+  "connectivity.route_check",
+  "connectivity.reachability",
+  "web.http_probe",
+  "web.tls_cert",
+]);
 const MANAGED_TOOL_WORKFLOWS = [
   { workflowId: "tool_nmap", toolId: "nmap" },
   { workflowId: "tool_nuclei", toolId: "nuclei" },
@@ -225,11 +296,11 @@ const WORKFLOW_TABS: Record<
         "Interfaces, local IP, gateway, DNS resolvers, listening sockets, and route table.",
     },
     vi: {
-      label: "Local host / LAN",
-      eyebrow: "Local host",
-      title: "Local network state + listening ports",
+      label: "Máy này / LAN",
+      eyebrow: "Máy local",
+      title: "Trạng thái mạng local + port đang nghe",
       description:
-        "Interface, local IP, gateway, DNS resolver, listening socket, route table.",
+        "Interface, IP local, gateway, DNS resolver, socket đang nghe, và route table.",
     },
   },
   internet_path: {
@@ -241,9 +312,9 @@ const WORKFLOW_TABS: Record<
         "Public IP, DNS, ping, traceroute, HTTP, and TLS all run from the local host.",
     },
     vi: {
-      label: "Local → Internet / target",
-      eyebrow: "Local vantage",
-      title: "Local check ra Internet / target",
+      label: "Local → Internet / đích",
+      eyebrow: "Góc nhìn local",
+      title: "Kiểm tra từ máy local ra Internet / đích",
       description:
         "Public IP, DNS, ping, traceroute, HTTP, TLS đều chạy từ local host.",
     },
@@ -257,9 +328,9 @@ const WORKFLOW_TABS: Record<
         "Separate local listener evidence from the planned remote public port check.",
     },
     vi: {
-      label: "Public ingress",
+      label: "Dịch vụ public",
       eyebrow: "Public ingress",
-      title: "Listening ports + public port check",
+      title: "Port đang nghe + kiểm tra public",
       description:
         "Tách local listener evidence khỏi public port check cần remote vantage.",
     },
@@ -274,10 +345,10 @@ const WORKFLOW_TABS: Record<
     },
     vi: {
       label: "Nmap",
-      eyebrow: "Managed scanner",
+      eyebrow: "Gói scanner",
       title: "Nmap",
       description:
-        "Port discovery nam o tab rieng, mac dinh chi detect cong cu.",
+        "Port discovery nằm ở tab riêng, mặc định chỉ detect công cụ.",
     },
   },
   tool_nuclei: {
@@ -290,10 +361,10 @@ const WORKFLOW_TABS: Record<
     },
     vi: {
       label: "Nuclei",
-      eyebrow: "Managed scanner",
+      eyebrow: "Gói scanner",
       title: "Nuclei",
       description:
-        "Template scanning co tab rieng, risk va update policy tach khoi Nmap.",
+        "Template scanning có tab riêng, risk và update policy tách khỏi Nmap.",
     },
   },
   public_lookup: {
@@ -305,9 +376,9 @@ const WORKFLOW_TABS: Record<
     },
     vi: {
       label: "WHOIS / RDAP",
-      eyebrow: "Public lookup",
-      title: "WHOIS / RDAP lookup",
-      description: "Tra cuu dang ky cong khai cho domain, IP, URL hoac host:port.",
+      eyebrow: "Tra cứu công khai",
+      title: "Tra cứu WHOIS / RDAP",
+      description: "Tra cứu đăng ký công khai cho domain, IP, URL hoặc host:port.",
     },
   },
 };
@@ -360,7 +431,7 @@ const CHECK_COPY: Record<
     },
     vi: {
       eyebrow: "Local → DNS",
-      title: "DNS leak check",
+      title: "Kiểm tra DNS leak",
       subtitle: "DNS cấu hình vs DNS quan sát",
     },
   },
@@ -372,8 +443,8 @@ const CHECK_COPY: Record<
     },
     vi: {
       eyebrow: "Local → DNS",
-      title: "DNS lookup / nslookup",
-      subtitle: "A/AAAA/MX/TXT/NS records",
+      title: "Tra cứu DNS / nslookup",
+      subtitle: "Bản ghi A/AAAA/MX/TXT/NS",
     },
   },
   "connectivity.ping": {
@@ -397,7 +468,7 @@ const CHECK_COPY: Record<
     vi: {
       eyebrow: "Local → target",
       title: "Traceroute",
-      subtitle: "Hop path to target",
+      subtitle: "Đường đi từng hop tới target",
     },
   },
   "connectivity.fast_trace": {
@@ -457,7 +528,7 @@ const CHECK_COPY: Record<
     vi: {
       eyebrow: "Local reachability",
       title: "TCP connect check",
-      subtitle: "Local host to host:port",
+      subtitle: "Kết nối local tới host:port",
     },
   },
   "web.http_probe": {
@@ -468,8 +539,8 @@ const CHECK_COPY: Record<
     },
     vi: {
       eyebrow: "Local → HTTP",
-      title: "HTTP probe",
-      subtitle: "HTTP status + headers",
+      title: "Kiểm tra HTTP",
+      subtitle: "Mã trạng thái HTTP + header",
     },
   },
   "web.tls_cert": {
@@ -491,9 +562,9 @@ const CHECK_COPY: Record<
       subtitle: "Requires remote vantage",
     },
     vi: {
-      eyebrow: "Public ingress",
-      title: "Public port check",
-      subtitle: "Cần remote vantage",
+      eyebrow: "Dịch vụ public",
+      title: "Kiểm tra port public",
+      subtitle: "Cần điểm đo bên ngoài",
     },
   },
   "recon.whois_rdap": {
@@ -503,9 +574,9 @@ const CHECK_COPY: Record<
       subtitle: "Registrar, dates, nameservers",
     },
     vi: {
-      eyebrow: "Public lookup",
+      eyebrow: "Tra cứu công khai",
       title: "WHOIS / RDAP",
-      subtitle: "Registrar, dates, nameservers",
+      subtitle: "Nhà đăng ký, mốc thời gian, nameserver",
     },
   },
 };
@@ -591,7 +662,7 @@ export default function App() {
   const [commandDirty, setCommandDirty] = useState(false);
   const [targetPort, setTargetPort] = useState("");
   const [liveLines, setLiveLines] = useState<string[]>([]);
-  const [terminalShell, setTerminalShell] = useState<TerminalShell>("powershell");
+  const [liveExitCode, setLiveExitCode] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBusy, setIsBusy] = useState(false);
   const [isNetworkSummaryLoading, setIsNetworkSummaryLoading] = useState(false);
@@ -696,6 +767,7 @@ export default function App() {
   const verdict = resultVerdict(
     result,
     liveLines,
+    liveExitCode,
     isLiveRunning,
     liveWasStopped,
     selectedProbe,
@@ -797,6 +869,7 @@ export default function App() {
         }
 
         if (payload.kind === "exit") {
+          setLiveExitCode(payload.exit_code ?? null);
           setLiveLines((lines) => [
             ...lines,
             `\n[exit] code ${payload.exit_code ?? "unknown"}`,
@@ -878,7 +951,7 @@ export default function App() {
       setRemotePlanError(null);
       try {
         const plan = await invoke<RemoteVantagePlan>("remote_vantage_plan", {
-          provider: "sonar_nwork_remote_scan",
+          provider: "globalping",
           measurement: "tcp_port",
           target: requestTarget,
         });
@@ -1139,6 +1212,7 @@ export default function App() {
     liveRunIdRef.current = runId;
     liveStoppedRef.current = false;
     setResult(null);
+    setLiveExitCode(null);
     setLiveLines([`$ ${commandOverride ?? commandPreviewLabel(selectedProbe, commandPreview)}`]);
     setError(null);
     setIsLiveRunning(true);
@@ -1153,15 +1227,20 @@ export default function App() {
         commandOverride,
       });
       const wasStopped = liveStoppedRef.current;
+      const exitLine = `[exit] code ${summary.exit_code ?? "unknown"}`;
+      setLiveExitCode(summary.exit_code ?? null);
       setLiveLines((lines) => [
         ...lines,
         ...(hasStreamedLivePayload(lines) ? [] : capturedLiveLines(summary)),
+        ...(hasStreamedLivePayload(lines) ? [exitLine] : []),
         wasStopped
           ? `\n[stopped] ${summary.command} stopped with ${summary.exit_code ?? "unknown"}; partial output kept`
           : `\n[done] ${summary.command} exited with ${summary.exit_code ?? "unknown"}`,
       ]);
     } catch (err) {
       setError(String(err));
+      setLiveExitCode(-1);
+      setLiveLines((lines) => [...lines, `\n[exit] code -1`]);
     } finally {
       setIsLiveRunning(false);
       setIsStoppingLive(false);
@@ -1215,7 +1294,6 @@ export default function App() {
       await invoke("open_probe_terminal", {
         probeId: selectedProbe.id,
         target: probeTarget(selectedProbe, target, targetPort),
-        shell: terminalShell,
         commandOverride,
       });
     } catch (err) {
@@ -1416,29 +1494,15 @@ export default function App() {
                         onClick={() => void openTerminalForProbe()}
                       >
                         <Terminal size={15} />
-                        <span>{locale === "vi" ? "Mở terminal" : "Terminal"}</span>
+                        <span>{locale === "vi" ? "Mở CLI" : "CLI"}</span>
                       </button>
-                      <div className="segmented">
-                        <button
-                          className={terminalShell === "powershell" ? "active" : ""}
-                          onClick={() => setTerminalShell("powershell")}
-                        >
-                          PS
-                        </button>
-                        <button
-                          className={terminalShell === "cmd" ? "active" : ""}
-                          onClick={() => setTerminalShell("cmd")}
-                        >
-                          CMD
-                        </button>
-                      </div>
                     </div>
                     <label className="commandEditor">
                       <SquareTerminal size={14} />
                       <textarea
                         value={commandText}
                         spellCheck={false}
-                        aria-label="Command preview"
+                        aria-label="CLI command preview"
                         onChange={(event) => {
                           setCommandText(event.target.value);
                           setCommandDirty(true);
@@ -1651,12 +1715,12 @@ function PublicServicePlan({
     <section className="plannedPanel ingressReadinessPanel">
       <strong>
         {locale === "vi"
-          ? "Public ingress readiness"
+          ? "Sẵn sàng public ingress"
           : "Public ingress readiness"}
       </strong>
       <p>
         {locale === "vi"
-          ? "May local co the thu thap bang chung, con buoc ket luan Internet -> service can remote vantage that."
+          ? "Máy local có thể thu thập bằng chứng, còn bước kết luận Internet -> service cần remote vantage thật."
           : "Local checks gather evidence; the final Internet -> service verdict still needs a real outside vantage."}
       </p>
 
@@ -1688,6 +1752,53 @@ function PublicServicePlan({
   );
 }
 
+function nmapHostViews(raw: unknown): NmapHostView[] {
+  if (!raw || typeof raw !== "object") {
+    return [];
+  }
+  const hosts = (raw as { hosts?: unknown }).hosts;
+  if (!Array.isArray(hosts)) {
+    return [];
+  }
+
+  return hosts
+    .map((host): NmapHostView | null => {
+      if (!host || typeof host !== "object") {
+        return null;
+      }
+      const hostValue = (host as { host?: unknown }).host;
+      const portsValue = (host as { ports?: unknown }).ports;
+      if (typeof hostValue !== "string" || !Array.isArray(portsValue)) {
+        return null;
+      }
+      const ports = portsValue
+        .map((port): NmapOpenPortView | null => {
+          if (!port || typeof port !== "object") {
+            return null;
+          }
+          const value = port as {
+            port?: unknown;
+            proto?: unknown;
+            service?: unknown;
+            detail?: unknown;
+          };
+          if (typeof value.port !== "number") {
+            return null;
+          }
+          return {
+            port: value.port,
+            proto: typeof value.proto === "string" ? value.proto : "tcp",
+            service: typeof value.service === "string" ? value.service : "",
+            detail: typeof value.detail === "string" ? value.detail : "",
+          };
+        })
+        .filter((port): port is NmapOpenPortView => Boolean(port));
+
+      return { host: hostValue, ports };
+    })
+    .filter((host): host is NmapHostView => host !== null && host.ports.length > 0);
+}
+
 function ManagedToolPage({
   locale,
   tool,
@@ -1697,14 +1808,95 @@ function ManagedToolPage({
   tool: ManagedToolDescriptor | undefined;
   toolId: string;
 }) {
-  const effectiveTool = tool ?? managedToolForId([], toolId);
+  const effectiveTool = tool;
+  const isScanner = toolId === "nmap" || toolId === "nuclei";
   const [updatePlan, setUpdatePlan] = useState<ToolUpdatePlan | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [runtime, setRuntime] = useState<ToolRuntimeStatus | null>(null);
+  const [lifecycle, setLifecycle] = useState<ToolLifecyclePlan | null>(null);
+  const [isLifecycleBusy, setIsLifecycleBusy] = useState(false);
+  const [target, setTarget] = useState(toolId === "nuclei" ? "https://127.0.0.1" : "127.0.0.1");
+  const [scanProfile, setScanProfile] = useState<ScannerProfileId>(defaultScannerProfile(toolId));
+  const [scanPorts, setScanPorts] = useState<ScannerPortsId>("all");
+  const [customPorts, setCustomPorts] = useState("80,443");
+  const [scopeConfirmed, setScopeConfirmed] = useState(false);
+  const [commandPreview, setCommandPreview] = useState<CommandPreview | null>(null);
+  const [liveLines, setLiveLines] = useState<string[]>([]);
+  const [scannerResult, setScannerResult] = useState<ScannerRunView | null>(null);
+  const [scannerError, setScannerError] = useState<string | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
+  const runIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     setUpdatePlan(null);
     setUpdateError(null);
-  }, [toolId]);
+    setRuntime(null);
+    setLifecycle(null);
+    setTarget(toolId === "nuclei" ? "https://127.0.0.1" : "127.0.0.1");
+    setScanProfile(defaultScannerProfile(toolId));
+    setScanPorts(toolId === "nmap" ? "all" : "top");
+    setCustomPorts("80,443");
+    setScopeConfirmed(false);
+    setCommandPreview(null);
+    setLiveLines([]);
+    setScannerResult(null);
+    setScannerError(null);
+    setIsRunning(false);
+    setIsStopping(false);
+    runIdRef.current = null;
+
+    if (!isScanner || !hasTauriRuntime()) {
+      return;
+    }
+    void Promise.all([
+      invoke<ToolRuntimeStatus>("tool_runtime_status", { toolId }),
+      invoke<ToolLifecyclePlan>("tool_lifecycle_plan", { toolId }),
+    ])
+      .then(([nextRuntime, nextLifecycle]) => {
+        setRuntime(nextRuntime);
+        setLifecycle(nextLifecycle);
+      })
+      .catch((err) => setScannerError(String(err)));
+  }, [isScanner, toolId]);
+
+  useEffect(() => {
+    if (!isScanner || !hasTauriRuntime()) {
+      return;
+    }
+
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    void listen<ProbeLiveEvent>("probe-live-output", (event) => {
+      const payload = event.payload;
+      if (payload.run_id !== runIdRef.current) {
+        return;
+      }
+      if ((payload.kind === "stdout" || payload.kind === "stderr") && payload.line) {
+        setLiveLines((lines) => [
+          ...lines,
+          payload.kind === "stderr" ? `[stderr] ${payload.line}` : payload.line ?? "",
+        ]);
+      }
+      if (payload.kind === "exit") {
+        setLiveLines((lines) => [
+          ...lines,
+          `\n[exit] code ${payload.exit_code ?? "unknown"}`,
+        ]);
+      }
+    }).then((cleanup) => {
+      if (disposed) {
+        cleanup();
+      } else {
+        unlisten = cleanup;
+      }
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [isScanner, toolId]);
 
   if (!effectiveTool) {
     return (
@@ -1714,7 +1906,7 @@ function ManagedToolPage({
             <strong>{toolId}</strong>
             <span>
               {locale === "vi"
-                ? "Chua co metadata cho tool nay."
+                ? "Chưa có metadata cho tool này."
                 : "No metadata is available for this tool yet."}
             </span>
           </div>
@@ -1724,6 +1916,57 @@ function ManagedToolPage({
   }
 
   const currentTool = effectiveTool;
+  const scannerTarget = (): ProbeTargetInput => ({ type: "input", value: target.trim() });
+  const scanProfiles = scannerProfileOptions(toolId, locale);
+  const resolvedScanPorts = toolId === "nmap"
+    ? scanPorts === "custom" ? customPorts.trim() : scanPorts
+    : undefined;
+  const packageStatusTone = runtime?.available ? "ready" : runtime ? "missing" : "waiting";
+  const packageStatusTitle = runtime?.available
+    ? locale === "vi" ? "Đã sẵn sàng" : "Ready"
+    : runtime
+      ? locale === "vi" ? "Chưa detect được" : "Not detected"
+      : locale === "vi" ? "Chưa dò runtime" : "Not checked";
+  const packageStatusDetail = packageStatusDetailLabel(runtime, lifecycle, locale);
+  const packageModeLabel = locale === "vi" ? "Gói SonarNwork" : "SonarNwork package";
+  const lifecycleActionLabel = isLifecycleBusy
+    ? locale === "vi" ? "Đang xử lý..." : "Working..."
+    : runtime?.available
+      ? locale === "vi" ? "Cập nhật gói" : "Update package"
+      : locale === "vi" ? "Cài vào app" : "Install in app";
+
+  const nmapOpenHosts = scannerResult ? nmapHostViews(scannerResult.output.raw) : [];
+
+  async function refreshRuntime() {
+    setScannerError(null);
+    try {
+      const [nextRuntime, nextLifecycle] = await Promise.all([
+        invoke<ToolRuntimeStatus>("tool_runtime_status", { toolId }),
+        invoke<ToolLifecyclePlan>("tool_lifecycle_plan", { toolId }),
+      ]);
+      setRuntime(nextRuntime);
+      setLifecycle(nextLifecycle);
+    } catch (err) {
+      setScannerError(String(err));
+    }
+  }
+
+  async function runLifecycleAction() {
+    if (!lifecycle?.install_supported || isLifecycleBusy) {
+      return;
+    }
+    setScannerError(null);
+    setIsLifecycleBusy(true);
+    try {
+      const command = runtime?.available ? "update_tool" : "install_tool";
+      setRuntime(await invoke<ToolRuntimeStatus>(command, { toolId }));
+      setLifecycle(await invoke<ToolLifecyclePlan>("tool_lifecycle_plan", { toolId }));
+    } catch (err) {
+      setScannerError(String(err));
+    } finally {
+      setIsLifecycleBusy(false);
+    }
+  }
 
   async function requestUpdatePlan() {
     setUpdateError(null);
@@ -1741,13 +1984,100 @@ function ManagedToolPage({
     }
   }
 
+  async function previewScanner() {
+    setScannerError(null);
+    setCommandPreview(null);
+    try {
+      setCommandPreview(
+        await invoke<CommandPreview>("scanner_command", {
+          toolId,
+          target: scannerTarget(),
+          scopeConfirmed,
+          scanProfile,
+          scanPorts: resolvedScanPorts,
+        }),
+      );
+    } catch (err) {
+      setScannerError(String(err));
+    }
+  }
+
+  async function runScanner() {
+    if (isRunning) {
+      return;
+    }
+    const runId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    runIdRef.current = runId;
+    setScannerError(null);
+    setScannerResult(null);
+    setLiveLines([]);
+    setIsRunning(true);
+    setIsStopping(false);
+    try {
+      const result = await invoke<ScannerRunView>("run_scanner_live", {
+        runId,
+        toolId,
+        target: scannerTarget(),
+        scopeConfirmed,
+        scanProfile,
+        scanPorts: resolvedScanPorts,
+      });
+      setScannerResult(result);
+      setLiveLines((lines) =>
+        lines.length > 0 ? lines : capturedLiveLines(result.summary),
+      );
+    } catch (err) {
+      setScannerError(String(err));
+    } finally {
+      setIsRunning(false);
+      setIsStopping(false);
+      runIdRef.current = null;
+    }
+  }
+
+  async function stopScanner() {
+    const runId = runIdRef.current;
+    if (!runId || isStopping) {
+      return;
+    }
+    setIsStopping(true);
+    try {
+      const stopped = await invoke<boolean>("cancel_probe_live", { runId });
+      setLiveLines((lines) => [
+        ...lines,
+        stopped ? "\n[stop] stop requested" : "\n[stop] no running process found",
+      ]);
+      if (!stopped) {
+        setIsStopping(false);
+      }
+    } catch (err) {
+      setScannerError(String(err));
+      setIsStopping(false);
+    }
+  }
+
+  async function openScannerCli() {
+    setScannerError(null);
+    try {
+      await invoke("open_scanner_terminal", {
+        toolId,
+        target: scannerTarget(),
+        scopeConfirmed,
+        scanProfile,
+        scanPorts: resolvedScanPorts,
+      });
+    } catch (err) {
+      setScannerError(String(err));
+    }
+  }
+
   return (
     <section className="externalScannerPanel managedToolPage">
       <header>
         <div>
           <strong>
             {locale === "vi"
-              ? `${currentTool.display_name} rieng`
+              ? `${currentTool.display_name} riêng`
               : `${currentTool.display_name} tool`}
           </strong>
           <span>{toolPageSubtitle(currentTool, locale)}</span>
@@ -1758,48 +2088,235 @@ function ManagedToolPage({
         <article className={`externalToolCard ${currentTool.id}`}>
           <header>
             <div>
-              <small>{toolCategoryLabel(currentTool.category)}</small>
+              <small>{toolCategoryLabel(currentTool.category, locale)}</small>
               <strong>{currentTool.display_name}</strong>
             </div>
-            <em className={currentTool.risk}>{toolRiskLabel(currentTool.risk)}</em>
+            <em className={currentTool.risk}>{toolRiskLabel(currentTool.risk, locale)}</em>
           </header>
-          <p>{currentTool.notes}</p>
+          <p>{toolPageDescription(currentTool, locale)}</p>
           <dl>
             <div>
-              <dt>{locale === "vi" ? "Nguon" : "Source"}</dt>
+              <dt>{locale === "vi" ? "Nguồn" : "Source"}</dt>
               <dd>{currentTool.update.source_label}</dd>
             </div>
             <div>
-              <dt>{locale === "vi" ? "Cai dat" : "Install"}</dt>
-              <dd>{installStrategyLabel(currentTool.install_strategy)}</dd>
+              <dt>{locale === "vi" ? "Cài đặt" : "Install"}</dt>
+              <dd>{installStrategyLabel(currentTool.install_strategy, locale)}</dd>
             </div>
             <div>
-              <dt>{locale === "vi" ? "Mac dinh" : "Default"}</dt>
-              <dd>{currentTool.default_enabled ? "enabled" : "disabled"}</dd>
+              <dt>{locale === "vi" ? "Mặc định" : "Default"}</dt>
+              <dd>{defaultEnabledLabel(currentTool.default_enabled, locale)}</dd>
             </div>
           </dl>
           <div className="toolCapabilityRow">
             {currentTool.capabilities.map((capability) => (
-              <span key={capability}>{capabilityLabel(capability)}</span>
+              <span key={capability}>{capabilityLabel(capability, locale)}</span>
             ))}
           </div>
-          <div className="toolActions">
-            <button className="secondaryButton" onClick={() => void requestUpdatePlan()}>
-              <RefreshCw size={14} />
-              <span>{locale === "vi" ? "Update" : "Update"}</span>
-            </button>
-            <span>
-              {currentTool.update.update_supported ? "GitHub/latest" : "detect-only"}
-            </span>
-          </div>
-          {updatePlan ? (
-            <div className="toolUpdatePlan">
-              <strong>{updatePlan.source_label}</strong>
-              <span>{updatePlan.update_note}</span>
-              <code>{updatePlan.latest_url}</code>
+
+          {isScanner ? (
+            <div className="scannerRunner">
+              <div className={`scannerPackageStatus ${packageStatusTone}`}>
+                <div>
+                  <span>{locale === "vi" ? "Gói runtime" : "Runtime package"}</span>
+                  <strong>{packageStatusTitle}</strong>
+                  <small>{packageStatusDetail}</small>
+                </div>
+                <em>{packageModeLabel}</em>
+              </div>
+
+              <div className="scannerTargetRow">
+                <label>
+                  <span>{locale === "vi" ? "Mục tiêu" : "Target"}</span>
+                  <input
+                    value={target}
+                    onChange={(event) => {
+                      setTarget(event.target.value);
+                      setCommandPreview(null);
+                    }}
+                    placeholder={toolId === "nuclei" ? "https://127.0.0.1" : "127.0.0.1"}
+                    disabled={isRunning}
+                  />
+                </label>
+                <button className="secondaryButton" onClick={() => void refreshRuntime()}>
+                  <RefreshCw size={14} />
+                  <span>{locale === "vi" ? "Dò gói" : "Detect"}</span>
+                </button>
+              </div>
+
+              <div className="scannerModeGrid">
+                {scanProfiles.map((profile) => (
+                  <button
+                    key={profile.id}
+                    type="button"
+                    className={scanProfile === profile.id ? "active" : ""}
+                    disabled={isRunning}
+                    onClick={() => {
+                      setScanProfile(profile.id);
+                      setCommandPreview(null);
+                    }}
+                  >
+                    <strong>{profile.label}</strong>
+                    <span>{profile.description}</span>
+                  </button>
+                ))}
+              </div>
+
+              {toolId === "nmap" ? (
+                <div className="scannerTargetRow">
+                  <label>
+                    <span>{locale === "vi" ? "Port scan" : "Ports"}</span>
+                    <select
+                      value={scanPorts}
+                      onChange={(event) => {
+                        setScanPorts(event.target.value as ScannerPortsId);
+                        setCommandPreview(null);
+                      }}
+                      disabled={isRunning}
+                    >
+                      <option value="all">{locale === "vi" ? "Táº¥t cáº£ port" : "All ports"}</option>
+                      <option value="top">{locale === "vi" ? "Port phá»• biáº¿n" : "Top ports"}</option>
+                      <option value="custom">{locale === "vi" ? "Tá»± nháº­p" : "Custom"}</option>
+                    </select>
+                  </label>
+                  {scanPorts === "custom" ? (
+                    <label>
+                      <span>{locale === "vi" ? "Danh sÃ¡ch port" : "Port list"}</span>
+                      <input
+                        value={customPorts}
+                        onChange={(event) => {
+                          setCustomPorts(event.target.value);
+                          setCommandPreview(null);
+                        }}
+                        placeholder="80,443,1000-2000"
+                        disabled={isRunning}
+                      />
+                    </label>
+                  ) : null}
+                </div>
+              ) : null}
+
+              <label className="scopeConfirmation scannerScope">
+                <input
+                  type="checkbox"
+                  checked={scopeConfirmed}
+                  onChange={(event) => {
+                    setScopeConfirmed(event.target.checked);
+                    setCommandPreview(null);
+                  }}
+                  disabled={isRunning}
+                />
+                <span>
+                  {locale === "vi"
+                    ? "Tôi sở hữu hoặc được phép quét mục tiêu này."
+                    : "I own or am authorized to scan this target."}
+                </span>
+              </label>
+
+              <div className="scannerActions">
+                <button
+                  className="primaryButton"
+                  onClick={() => void runLifecycleAction()}
+                  disabled={!lifecycle?.install_supported || isLifecycleBusy || isRunning}
+                >
+                  <RefreshCw size={14} />
+                  <span>{lifecycleActionLabel}</span>
+                </button>
+                <button
+                  className="secondaryButton"
+                  onClick={() => void previewScanner()}
+                  disabled={!scopeConfirmed || !target.trim() || isRunning}
+                >
+                  <SquareTerminal size={14} />
+                  <span>{locale === "vi" ? "Xem lệnh" : "Preview"}</span>
+                </button>
+                <button
+                  className="primaryButton"
+                  onClick={() => void runScanner()}
+                  disabled={!runtime?.available || !scopeConfirmed || !target.trim() || isRunning}
+                >
+                  <Play size={14} />
+                  <span>{locale === "vi" ? "Chạy" : "Run"}</span>
+                </button>
+                <button
+                  className="secondaryButton"
+                  onClick={() => void openScannerCli()}
+                  disabled={!scopeConfirmed || !target.trim() || isRunning}
+                >
+                  <Terminal size={14} />
+                  <span>{locale === "vi" ? "Mở CLI" : "Open CLI"}</span>
+                </button>
+                <button
+                  className="secondaryButton"
+                  onClick={() => void stopScanner()}
+                  disabled={!isRunning || isStopping}
+                >
+                  <Square size={14} />
+                  <span>
+                    {isStopping
+                      ? locale === "vi" ? "Đang dừng..." : "Stopping..."
+                      : locale === "vi" ? "Dừng" : "Stop"}
+                  </span>
+                </button>
+              </div>
+
+              {commandPreview ? (
+                <div className="scannerCommandPreview">
+                  <span>{locale === "vi" ? "Lệnh CLI" : "CLI command"}</span>
+                  <code>{commandPreview.display}</code>
+                </div>
+              ) : null}
+              {liveLines.length > 0 ? (
+                <pre className="scannerLiveConsole">{liveLines.join("\n")}</pre>
+              ) : null}
+              {scannerResult ? (
+                <div className="scannerResult">
+                  <strong>{scannerResult.output.summary ?? "Scanner completed"}</strong>
+                  {scannerResult.output.summary_rows.map((row) => (
+                    <span key={row.label}>{row.label}: {row.value}</span>
+                  ))}
+                  {nmapOpenHosts.length > 0 ? (
+                    <div className="nmapPortMap">
+                      {nmapOpenHosts.map((host) => (
+                        <div className="nmapHostRow" key={host.host}>
+                          <strong>{host.host}</strong>
+                          <div>
+                            {host.ports.map((port) => (
+                              <span className="openPortPill" key={`${host.host}-${port.proto}-${port.port}`}>
+                                {port.port}/{port.proto}
+                                {port.service ? <small>{port.service}</small> : null}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {scannerError ? <div className="scannerError">{scannerError}</div> : null}
             </div>
-          ) : null}
-          {updateError ? <div className="toolUpdatePlan error">{updateError}</div> : null}
+          ) : (
+            <>
+              <div className="toolActions">
+                <button className="secondaryButton" onClick={() => void requestUpdatePlan()}>
+                  <RefreshCw size={14} />
+                  <span>Update</span>
+                </button>
+                <span>
+                  {currentTool.update.update_supported ? "GitHub/latest" : "detect-only"}
+                </span>
+              </div>
+              {updatePlan ? (
+                <div className="toolUpdatePlan">
+                  <strong>{updatePlan.source_label}</strong>
+                  <span>{updatePlan.update_note}</span>
+                  <code>{updatePlan.latest_url}</code>
+                </div>
+              ) : null}
+              {updateError ? <div className="toolUpdatePlan error">{updateError}</div> : null}
+            </>
+          )}
         </article>
       </div>
     </section>
@@ -1819,16 +2336,22 @@ function RemotePlanPanel({
 }) {
   const facts = plan
     ? [
-        [locale === "vi" ? "Provider" : "Provider", remoteProviderLabel(plan.request.provider)],
+        [locale === "vi" ? "Nguồn đo" : "Provider", remoteProviderLabel(plan.request.provider)],
         [
-          locale === "vi" ? "Phep do" : "Measurement",
+          locale === "vi" ? "Phép đo" : "Measurement",
           remoteMeasurementLabel(plan.request.measurement),
         ],
-        [locale === "vi" ? "Dich" : "Target", formatProbeTarget(plan.request.target)],
-        [
-          locale === "vi" ? "Scope token" : "Scope token",
-          plan.request.scope_token ?? (locale === "vi" ? "cho token handoff" : "pending handoff"),
-        ],
+        [locale === "vi" ? "Đích" : "Target", formatProbeTarget(plan.request.target)],
+        plan.request.provider === "sonar_nwork_remote_scan"
+          ? [
+              locale === "vi" ? "Token phạm vi" : "Scope token",
+              plan.request.scope_token ??
+                (locale === "vi" ? "chờ bàn giao token" : "pending handoff"),
+            ]
+          : [
+              locale === "vi" ? "Điểm đo" : "Vantage",
+              locale === "vi" ? "ngoài mạng local" : "outside local network",
+            ],
       ]
     : [];
 
@@ -1836,18 +2359,18 @@ function RemotePlanPanel({
     <section className="plannedPanel remotePlanPanel">
       <strong>
         {locale === "vi"
-          ? "Ke hoach remote-scan cho public ingress"
-          : "Remote-scan plan for public ingress"}
+          ? "Kế hoạch Globalping cho public ingress"
+          : "Globalping-style public ingress plan"}
       </strong>
       <p>
         {locale === "vi"
-          ? "Local host khong tu chung minh duoc Internet co connect nguoc vao service. Plan nay chuan bi scope de remote vantage thuc hien buoc do."
-          : "Local host cannot prove inbound reachability by itself. This plan prepares the scoped handoff for an outside vantage."}
+          ? "Netstat/listener chỉ là bằng chứng local. Public ingress cần điểm đo ngoài mạng thử TCP vào đúng host:port."
+          : "Netstat/listeners are local evidence only. Public ingress needs an outside vantage to try TCP against the scoped host:port."}
       </p>
 
       {loading ? (
         <div className="remotePlanStatus">
-          {locale === "vi" ? "Dang tao ke hoach..." : "Preparing plan..."}
+          {locale === "vi" ? "Đang tạo kế hoạch..." : "Preparing plan..."}
         </div>
       ) : null}
 
@@ -1870,7 +2393,7 @@ function RemotePlanPanel({
             {plan.allowed_probe_ids.map((probeId) => (
               <li key={probeId}>
                 <span>{probeId}</span>
-                <em>{locale === "vi" ? "remote" : "remote"}</em>
+                <em>{locale === "vi" ? "từ ngoài" : "remote"}</em>
               </li>
             ))}
           </ul>
@@ -1885,10 +2408,10 @@ function publicIngressReadinessItems(
   networkSummary: NetworkSummary | null,
   result: ProbeRunView | null,
 ): IngressReadinessItem[] {
-  const remoteAction = locale === "vi" ? "Lap plan" : "Plan";
-  const localStateAction = locale === "vi" ? "Kiem tra LAN" : "Check LAN";
-  const listenersAction = locale === "vi" ? "Kiem tra port" : "Check ports";
-  const reachabilityAction = locale === "vi" ? "Thu TCP" : "Test TCP";
+  const remoteAction = locale === "vi" ? "Tạo kế hoạch" : "Plan";
+  const localStateAction = locale === "vi" ? "Kiểm tra LAN" : "Check LAN";
+  const listenersAction = locale === "vi" ? "Kiểm tra port" : "Check ports";
+  const reachabilityAction = locale === "vi" ? "Thử TCP" : "Test TCP";
   const egressIp = networkSummary?.egressIp?.trim() ?? "";
   const localIps = summaryRowValue(result, "Local IPs");
   const publicBinds = summaryRowValue(result, "Public binds");
@@ -1899,13 +2422,13 @@ function publicIngressReadinessItems(
       id: "remote-vantage",
       title:
         locale === "vi"
-          ? "Remote vantage cho public ingress"
+          ? "Điểm đo bên ngoài cho dịch vụ public"
           : "Remote vantage for public ingress",
       detail:
         locale === "vi"
-          ? "Sinh handoff de may ben ngoai thu ket noi vao host:port nay."
+          ? "Tạo bước bàn giao để máy bên ngoài thử kết nối vào host:port này."
           : "Prepare a handoff so an outside host can test this host:port.",
-      status: locale === "vi" ? "san sang" : "ready",
+      status: locale === "vi" ? "sẵn sàng" : "ready",
       tone: "ready",
       actionLabel: remoteAction,
       actionProbeId: "public.port_check",
@@ -1913,12 +2436,12 @@ function publicIngressReadinessItems(
     natReadinessItem(locale, egressIp, localIps, localStateAction),
     {
       id: "upnp",
-      title: locale === "vi" ? "Trang thai UPnP" : "UPnP state",
+      title: locale === "vi" ? "Trạng thái UPnP" : "UPnP state",
       detail:
         locale === "vi"
-          ? "Chua co probe UPnP local; can bo sung discovery IGD/PCP/NAT-PMP."
+          ? "Chưa có probe UPnP local; cần bổ sung discovery IGD/PCP/NAT-PMP."
           : "No local UPnP probe yet; needs IGD/PCP/NAT-PMP discovery.",
-      status: locale === "vi" ? "ke tiep" : "next",
+      status: locale === "vi" ? "kế tiếp" : "next",
       tone: "planned",
     },
     firewallReadinessItem(locale, publicBinds, connected, listenersAction, reachabilityAction),
@@ -1926,13 +2449,13 @@ function publicIngressReadinessItems(
       id: "scope-token",
       title:
         locale === "vi"
-          ? "Token handoff co pham vi"
+          ? "Token bàn giao có phạm vi"
           : "Scoped token handoff",
       detail:
         locale === "vi"
-          ? "Remote-scan chi duoc tao sau khi chon target va port ro rang."
+          ? "Quét từ ngoài chỉ được tạo sau khi chọn target và port rõ ràng."
           : "Remote-scan is prepared only after an explicit host and port are selected.",
-      status: locale === "vi" ? "can target" : "needs target",
+      status: locale === "vi" ? "cần target" : "needs target",
       tone: "waiting",
       actionLabel: remoteAction,
       actionProbeId: "public.port_check",
@@ -1949,12 +2472,12 @@ function natReadinessItem(
   if (egressIp && isCgnatIp(egressIp)) {
     return {
       id: "nat-cgnat",
-      title: locale === "vi" ? "Goi y NAT / CGNAT" : "NAT / CGNAT hint",
+      title: locale === "vi" ? "Gợi ý NAT / CGNAT" : "NAT / CGNAT hint",
       detail:
         locale === "vi"
-          ? `Egress ${egressIp} nam trong 100.64.0.0/10; public ingress co the bi CGNAT chan.`
+          ? `Egress ${egressIp} nằm trong 100.64.0.0/10; public ingress có thể bị CGNAT chặn.`
           : `Egress ${egressIp} is inside 100.64.0.0/10; public ingress may be blocked by CGNAT.`,
-      status: locale === "vi" ? "canh bao" : "warning",
+      status: locale === "vi" ? "cảnh báo" : "warning",
       tone: "warning",
       actionLabel,
       actionProbeId: "local.network_state",
@@ -1964,10 +2487,10 @@ function natReadinessItem(
   if (egressIp && localIps && containsPrivateIp(localIps)) {
     return {
       id: "nat-cgnat",
-      title: locale === "vi" ? "Goi y NAT / CGNAT" : "NAT / CGNAT hint",
+      title: locale === "vi" ? "Gợi ý NAT / CGNAT" : "NAT / CGNAT hint",
       detail:
         locale === "vi"
-          ? `May co IP private, egress la ${egressIp}; can port-forward/router rule de mo ingress.`
+          ? `Máy có IP private, egress là ${egressIp}; cần port-forward/router rule để mở ingress.`
           : `This host has a private IP and egresses as ${egressIp}; inbound needs a router or port-forward rule.`,
       status: locale === "vi" ? "co NAT" : "NAT likely",
       tone: "warning",
@@ -1979,12 +2502,12 @@ function natReadinessItem(
   if (egressIp) {
     return {
       id: "nat-cgnat",
-      title: locale === "vi" ? "Goi y NAT / CGNAT" : "NAT / CGNAT hint",
+      title: locale === "vi" ? "Gợi ý NAT / CGNAT" : "NAT / CGNAT hint",
       detail:
         locale === "vi"
-          ? `Da thay public egress ${egressIp}; chay LAN check de so voi IP local.`
+          ? `Đã thấy public egress ${egressIp}; chạy LAN check để so với IP local.`
           : `Public egress ${egressIp} is visible; run LAN check to compare it with local addresses.`,
-      status: locale === "vi" ? "mot phan" : "partial",
+      status: locale === "vi" ? "một phần" : "partial",
       tone: "waiting",
       actionLabel,
       actionProbeId: "local.network_state",
@@ -1993,12 +2516,12 @@ function natReadinessItem(
 
   return {
     id: "nat-cgnat",
-    title: locale === "vi" ? "Goi y NAT / CGNAT" : "NAT / CGNAT hint",
+    title: locale === "vi" ? "Gợi ý NAT / CGNAT" : "NAT / CGNAT hint",
     detail:
       locale === "vi"
-        ? "Can IP egress va IP local de phan biet direct, NAT, hay CGNAT."
+        ? "Cần IP egress và IP local để phân biệt direct, NAT, hay CGNAT."
         : "Needs egress and local IP evidence to separate direct, NAT, and CGNAT cases.",
-    status: locale === "vi" ? "cho du lieu" : "waiting",
+    status: locale === "vi" ? "chờ dữ liệu" : "waiting",
     tone: "waiting",
     actionLabel,
     actionProbeId: "local.network_state",
@@ -2017,11 +2540,11 @@ function firewallReadinessItem(
       id: "firewall",
       title:
         locale === "vi"
-          ? "Goi y allow/deny cua tuong lua"
+          ? "Gợi ý allow/deny của tường lửa"
           : "Firewall allow/deny hint",
       detail:
         locale === "vi"
-          ? "TCP local connect thanh cong; neu remote fail thi xem router/firewall/WAN rule."
+          ? "TCP local connect thành công; nếu remote fail thì xem router/firewall/WAN rule."
           : "Local TCP connect succeeds; if remote fails, inspect router, firewall, or WAN rules.",
       status: locale === "vi" ? "local ok" : "local ok",
       tone: "ready",
@@ -2035,13 +2558,13 @@ function firewallReadinessItem(
       id: "firewall",
       title:
         locale === "vi"
-          ? "Goi y allow/deny cua tuong lua"
+          ? "Gợi ý allow/deny của tường lửa"
           : "Firewall allow/deny hint",
       detail:
         locale === "vi"
-          ? "TCP local connect fail; sua service/firewall local truoc khi thu remote."
+          ? "TCP local connect fail; sửa service/firewall local trước khi thử remote."
           : "Local TCP connect fails; fix the service or local firewall before remote testing.",
-      status: locale === "vi" ? "chan local" : "local blocked",
+      status: locale === "vi" ? "chặn local" : "local blocked",
       tone: "warning",
       actionLabel: reachabilityAction,
       actionProbeId: "connectivity.reachability",
@@ -2053,13 +2576,13 @@ function firewallReadinessItem(
       id: "firewall",
       title:
         locale === "vi"
-          ? "Goi y allow/deny cua tuong lua"
+          ? "Gợi ý allow/deny của tường lửa"
           : "Firewall allow/deny hint",
       detail:
         locale === "vi"
-          ? `${publicBinds} listener bind moi interface; can TCP check va remote vantage de ket luan.`
+          ? `${publicBinds} listener bind mọi interface; cần TCP check và remote vantage để kết luận.`
           : `${publicBinds} listener(s) bind all interfaces; use TCP check and remote vantage to finish the verdict.`,
-      status: locale === "vi" ? "co listener" : "listener found",
+      status: locale === "vi" ? "có listener" : "listener found",
       tone: "ready",
       actionLabel: reachabilityAction,
       actionProbeId: "connectivity.reachability",
@@ -2070,13 +2593,13 @@ function firewallReadinessItem(
     id: "firewall",
     title:
       locale === "vi"
-        ? "Goi y allow/deny cua tuong lua"
+        ? "Gợi ý allow/deny của tường lửa"
         : "Firewall allow/deny hint",
     detail:
       locale === "vi"
-        ? "Chay listening ports de biet service co bind dung interface khong."
+        ? "Chạy listening ports để biết service có bind đúng interface không."
         : "Run listening ports to see whether the service binds the right interface.",
-    status: locale === "vi" ? "cho du lieu" : "waiting",
+    status: locale === "vi" ? "chờ dữ liệu" : "waiting",
     tone: "waiting",
     actionLabel: listenersAction,
     actionProbeId: "local.listening_ports",
@@ -2130,8 +2653,7 @@ function toolIdForWorkflow(workflowId: string | undefined) {
 }
 
 function managedToolForId(tools: ManagedToolDescriptor[], toolId: string) {
-  return tools.find((tool) => tool.id === toolId) ??
-    fallbackManagedTools().find((tool) => tool.id === toolId);
+  return tools.find((tool) => tool.id === toolId);
 }
 
 function preferredProbeId(
@@ -2284,8 +2806,7 @@ function targetlessLabel(probeId: string, locale: Locale) {
 function directionClass(probeId: string) {
   if (
     probeId.startsWith("local.") ||
-    probeId === "connectivity.reachability" ||
-    probeId === "connectivity.route_check"
+    LOCAL_DIRECTION_PROBE_IDS.has(probeId)
   ) {
     return "local";
   }
@@ -2347,9 +2868,10 @@ function verdictPillLabel(
   return statusLabel(verdict.status, locale);
 }
 
-function resultVerdict(
+export function resultVerdict(
   result: ProbeRunView | null,
   liveLines: string[],
+  liveExitCode: number | null,
   isLiveRunning: boolean,
   liveWasStopped: boolean,
   selectedProbe: ProbeDescriptor | undefined,
@@ -2357,6 +2879,25 @@ function resultVerdict(
 ): ResultVerdict {
   if (result?.interpretation?.verdict) {
     return result.interpretation.verdict;
+  }
+  const resolvedLiveExitCode = liveExitCode ?? liveExitCodeFromLines(liveLines);
+  if (
+    liveLines.length > 0 &&
+    !isLiveRunning &&
+    resolvedLiveExitCode !== null &&
+    resolvedLiveExitCode !== 0
+  ) {
+    return {
+      status: "failed",
+      title:
+        locale === "vi"
+          ? `Lệnh live kết thúc với exit code ${resolvedLiveExitCode}.`
+          : `Live command exited with code ${resolvedLiveExitCode}.`,
+      detail:
+        locale === "vi"
+          ? "Xem raw output bên dưới để biết lỗi từ công cụ hệ thống."
+          : "Inspect the raw output below for the underlying tool error.",
+    };
   }
   if (liveWasStopped && liveLines.length > 0 && !isLiveRunning) {
     return {
@@ -2371,17 +2912,32 @@ function resultVerdict(
           : "The raw output below contains the data streamed before stop.",
     };
   }
-  if (liveLines.length > 0 || isLiveRunning) {
+  if (isLiveRunning) {
     return {
-      status: isLiveRunning ? "unknown" : "ok",
-      title: isLiveRunning
-        ? locale === "vi"
-          ? "Lệnh live đang chạy."
-          : "Live command is running."
-        : locale === "vi"
-          ? "Lệnh live đã hoàn tất."
-          : "Live command completed.",
+      status: "unknown",
+      title: locale === "vi" ? "Lệnh live đang chạy." : "Live command is running.",
       detail: null,
+    };
+  }
+  if (liveLines.length > 0) {
+    if (resolvedLiveExitCode === 0) {
+      return {
+        status: "ok",
+        title: locale === "vi" ? "Lệnh live đã hoàn tất." : "Live command completed.",
+        detail: null,
+      };
+    }
+    // Completed but no confirmed success code — never claim green (E3).
+    return {
+      status: "unknown",
+      title:
+        locale === "vi"
+          ? "Lệnh live đã kết thúc nhưng chưa xác nhận được thành công."
+          : "Live command finished without a confirmed success code.",
+      detail:
+        locale === "vi"
+          ? "Không thấy mã thoát 0 rõ ràng — xem raw output bên dưới để kiểm chứng."
+          : "No explicit exit code 0 — inspect the raw output below to confirm.",
     };
   }
   if (selectedProbe && probeRequiresRemoteVantage(selectedProbe.id)) {
@@ -2399,6 +2955,18 @@ function resultVerdict(
     title: locale === "vi" ? "Chưa có kết quả." : "No result yet.",
     detail: null,
   };
+}
+
+export function liveExitCodeFromLines(liveLines: string[]) {
+  for (let index = liveLines.length - 1; index >= 0; index -= 1) {
+    const match = liveLines[index].match(
+      /\[exit\]\s+code\s+(-?\d+)|\[done\].*exited with\s+(-?\d+)/i,
+    );
+    if (match) {
+      return Number(match[1] ?? match[2]);
+    }
+  }
+  return null;
 }
 
 function resultSummaryRows(result: ProbeRunView | null, locale: Locale): SummaryRow[] {
@@ -2477,29 +3045,57 @@ function fallbackAppInfo(): AppInfo {
 function fallbackRemotePlan(target: ProbeTargetInput): RemoteVantagePlan {
   return {
     request: {
-      provider: "sonar_nwork_remote_scan",
+      provider: "globalping",
       measurement: "tcp_port",
       target,
       locations: [],
       scope_token: null,
     },
     allowed_probe_ids: ["public.port_check"],
-    warning: "Remote-scan execution requires token handoff and explicit target scope.",
+    warning:
+      "Browser preview cannot ask Globalping yet; the desktop app prepares a Globalping-style outside TCP check.",
   };
 }
 
 function fallbackManagedTools(): ManagedToolDescriptor[] {
   return [
     {
+      id: "nmap",
+      display_name: "Nmap",
+      source: "nmap_org",
+      install_strategy: "system_installer",
+      risk: "active_scanner",
+      category: "port_discovery",
+      capabilities: ["port_scan"],
+      target_kinds: ["host", "ip_address", "domain", "url", "network_range"],
+      interactions: ["preview", "run_in_app", "open_in_cli", "stop", "structured_output"],
+      scope_requirement: "active_target",
+      default_enabled: false,
+      notes:
+        "SonarNwork scanner package; the app manages detection and launch, while the official Nmap installer may request Npcap or system permission.",
+      update: {
+        source_label: "Nmap.org",
+        source_url: "https://nmap.org/download.html",
+        latest_url: "https://nmap.org/download.html",
+        update_supported: true,
+        update_note:
+          "Install or update from SonarNwork using the official Nmap installer, then refresh package detection.",
+      },
+    },
+    {
       id: "nuclei",
-      display_name: "nuclei",
+      display_name: "Nuclei",
       source: "project_discovery",
-      install_strategy: "auto_download",
+      install_strategy: "managed_download",
       risk: "intrusive_scanner",
       category: "vuln_scanning",
       capabilities: ["template_scan"],
+      target_kinds: ["url"],
+      interactions: ["preview", "run_in_app", "open_in_cli", "stop", "structured_output"],
+      scope_requirement: "intrusive_target",
       default_enabled: false,
-      notes: "Template scanning is never beginner-default and requires explicit scope.",
+      notes:
+        "Template scanning is never beginner-default and requires explicit scope.",
       update: {
         source_label: "GitHub: projectdiscovery/nuclei",
         source_url: "https://github.com/projectdiscovery/nuclei",
@@ -2507,25 +3103,6 @@ function fallbackManagedTools(): ManagedToolDescriptor[] {
         update_supported: true,
         update_note:
           "Update from ProjectDiscovery GitHub releases; running templates still requires explicit scope.",
-      },
-    },
-    {
-      id: "nmap",
-      display_name: "nmap",
-      source: "nmap_org",
-      install_strategy: "detect_only",
-      risk: "active_scanner",
-      category: "port_discovery",
-      capabilities: ["port_scan"],
-      default_enabled: false,
-      notes: "Detect-only integration; SonarNwork does not bundle Nmap.",
-      update: {
-        source_label: "Nmap.org",
-        source_url: "https://nmap.org/download.html",
-        latest_url: "https://nmap.org/download.html",
-        update_supported: false,
-        update_note:
-          "Detect-only: install or update Nmap with the system installer/package manager, then refresh detection in SonarNwork.",
       },
     },
   ];
@@ -2613,43 +3190,189 @@ function formatProbeTarget(target: ProbeTargetInput) {
   return "current internet path";
 }
 
-function installStrategyLabel(strategy: ToolInstallStrategy) {
-  const labels: Record<ToolInstallStrategy, string> = {
-    auto_download: "auto-download",
-    detect_only: "detect-only",
-    api_only: "API-only",
+function installStrategyLabel(strategy: ToolInstallStrategy, locale: Locale) {
+  const labels: Record<Locale, Record<ToolInstallStrategy, string>> = {
+    en: {
+      auto_download: "auto-download",
+      detect_only: "detect-only",
+      api_only: "API-only",
+      system_installer: "app-managed installer",
+      managed_download: "app-managed package",
+    },
+    vi: {
+      auto_download: "tự tải",
+      detect_only: "chỉ dò",
+      api_only: "API-only",
+      system_installer: "app quản lý",
+      managed_download: "app quản lý",
+    },
   };
-  return labels[strategy] ?? strategy;
+  return labels[locale][strategy] ?? strategy;
 }
 
-function toolRiskLabel(risk: ToolRisk) {
-  const labels: Record<ToolRisk, string> = {
-    passive: "passive",
-    safe_remote_vantage: "remote",
-    active_scanner: "active",
-    intrusive_scanner: "intrusive",
+function toolRiskLabel(risk: ToolRisk, locale: Locale) {
+  const labels: Record<Locale, Record<ToolRisk, string>> = {
+    en: {
+      passive: "passive",
+      safe_remote_vantage: "remote",
+      active_scanner: "active",
+      intrusive_scanner: "intrusive",
+    },
+    vi: {
+      passive: "thụ động",
+      safe_remote_vantage: "remote",
+      active_scanner: "chủ động",
+      intrusive_scanner: "xâm nhập",
+    },
   };
-  return labels[risk] ?? risk;
+  return labels[locale][risk] ?? risk;
 }
 
-function toolCategoryLabel(category: ToolCategory) {
-  return category.replace(/_/g, " ");
+function toolCategoryLabel(category: ToolCategory, locale: Locale) {
+  const labels: Record<Locale, Record<ToolCategory, string>> = {
+    en: {
+      path_diagnostics: "path diagnostics",
+      dns: "DNS",
+      web: "web",
+      port_discovery: "port discovery",
+      vuln_scanning: "vulnerability scanning",
+      remote_vantage: "remote vantage",
+      local_inspection: "local inspection",
+    },
+    vi: {
+      path_diagnostics: "chẩn đoán đường đi",
+      dns: "DNS",
+      web: "web",
+      port_discovery: "dò port",
+      vuln_scanning: "quét lỗ hổng",
+      remote_vantage: "remote vantage",
+      local_inspection: "kiểm tra local",
+    },
+  };
+  return labels[locale][category] ?? category.replace(/_/g, " ");
 }
 
-function capabilityLabel(capability: string) {
-  return capability.replace(/_/g, " ");
+function capabilityLabel(capability: string, locale: Locale) {
+  const labels: Record<Locale, Record<string, string>> = {
+    en: {
+      port_scan: "port scan",
+      template_scan: "template scan",
+    },
+    vi: {
+      port_scan: "quét port",
+      template_scan: "quét template",
+    },
+  };
+  return labels[locale][capability] ?? capability.replace(/_/g, " ");
+}
+
+function defaultScannerProfile(toolId: string): ScannerProfileId {
+  return toolId === "nuclei" ? "safe" : "version";
+}
+
+function scannerProfileOptions(
+  toolId: string,
+  locale: Locale,
+): Array<{ id: ScannerProfileId; label: string; description: string }> {
+  if (toolId === "nuclei") {
+    return [
+      {
+        id: "safe",
+        label: locale === "vi" ? "Safe" : "Safe",
+        description: locale === "vi" ? "misconfig/exposure, bỏ interactsh" : "misconfig/exposure, no interactsh",
+      },
+      {
+        id: "http_exposure",
+        label: locale === "vi" ? "HTTP exposure" : "HTTP exposure",
+        description: locale === "vi" ? "template HTTP + exposure" : "HTTP and exposure templates",
+      },
+      {
+        id: "known_vulns",
+        label: locale === "vi" ? "CVE/vuln" : "CVE/vuln",
+        description: locale === "vi" ? "CVE, RCE, LFI, SQLi, XSS" : "CVE, RCE, LFI, SQLi, XSS",
+      },
+      {
+        id: "full",
+        label: locale === "vi" ? "Full selected" : "Full selected",
+        description: locale === "vi" ? "mọi severity đã chọn" : "all selected severities",
+      },
+    ];
+  }
+  return [
+    {
+      id: "fast",
+      label: locale === "vi" ? "Fast" : "Fast",
+      description: locale === "vi" ? "100 TCP port phổ biến" : "top 100 TCP ports",
+    },
+    {
+      id: "version",
+      label: locale === "vi" ? "Version" : "Version",
+      description: locale === "vi" ? "service version nhẹ" : "light service detection",
+    },
+    {
+      id: "deep",
+      label: locale === "vi" ? "Deep" : "Deep",
+      description: locale === "vi" ? "service + OS/script nhẹ" : "service, OS and light scripts",
+    },
+    {
+      id: "udp_quick",
+      label: locale === "vi" ? "UDP quick" : "UDP quick",
+      description: locale === "vi" ? "25 UDP port phổ biến" : "top 25 UDP ports",
+    },
+  ];
+}
+
+function defaultEnabledLabel(enabled: boolean, locale: Locale) {
+  if (enabled) {
+    return locale === "vi" ? "Bật" : "enabled";
+  }
+  return locale === "vi" ? "Tắt" : "disabled";
+}
+
+function packageStatusDetailLabel(
+  runtime: ToolRuntimeStatus | null,
+  lifecycle: ToolLifecyclePlan | null,
+  locale: Locale,
+) {
+  if (runtime?.available) {
+    return runtime.version ?? runtime.executable ?? (locale === "vi" ? "đã sẵn sàng" : "available");
+  }
+  if (locale === "vi") {
+    if (runtime?.error) {
+      return "Chưa tìm thấy runtime. Kiểm tra cài đặt hoặc bấm cài/cập nhật gói.";
+    }
+    if (lifecycle?.install_supported) {
+      return "Gói có thể cài hoặc cập nhật từ SonarNwork.";
+    }
+    return "Bấm Dò gói để kiểm tra.";
+  }
+  return runtime?.error ?? lifecycle?.note ?? "Run package detection.";
 }
 
 function toolPageSubtitle(tool: ManagedToolDescriptor, locale: Locale) {
   if (tool.id === "nmap") {
     return locale === "vi"
-      ? "Nmap chi detect/install ngoai, khong auto-download de tranh goi scanner active vao app."
-      : "Nmap is detect-only; SonarNwork does not auto-download an active port scanner.";
+      ? "Nmap là gói scanner của SonarNwork; app quản lý detect/chạy, installer có thể cần Npcap hoặc quyền hệ thống."
+      : "Nmap is a SonarNwork scanner package; the app manages detection/run, while the installer may need Npcap or system permission.";
   }
   if (tool.id === "nuclei") {
     return locale === "vi"
-      ? "Nuclei lay update tu ProjectDiscovery GitHub, nhung scan template van can scope ro rang."
-      : "Nuclei updates come from ProjectDiscovery GitHub; template runs still need explicit scope.";
+      ? "Nuclei là gói scanner của SonarNwork; app quản lý cài/cập nhật và scan template vẫn cần scope rõ ràng."
+      : "Nuclei is a SonarNwork scanner package; the app manages install/update and template runs still need explicit scope.";
+  }
+  return tool.notes;
+}
+
+function toolPageDescription(tool: ManagedToolDescriptor, locale: Locale) {
+  if (tool.id === "nmap") {
+    return locale === "vi"
+      ? "SonarNwork dò runtime, chạy scan trong app và mở CLI qua sonarnwork; cập nhật dùng installer chính thức."
+      : "SonarNwork detects the runtime, runs scans in-app, and opens the sonarnwork CLI; updates use the official installer.";
+  }
+  if (tool.id === "nuclei") {
+    return locale === "vi"
+      ? "SonarNwork tải/cập nhật Nuclei vào thư mục app và chỉ chạy template sau khi bạn xác nhận scope."
+      : "SonarNwork installs or updates Nuclei in the app-managed tools folder and only runs templates after scope confirmation.";
   }
   return tool.notes;
 }
@@ -2828,6 +3551,7 @@ function capturedLiveLines(summary: ProbeLiveSummary) {
   return [
     ...summary.stdout.map((line) => normalizeTerminalText(line)),
     ...summary.stderr.map((line) => `[stderr] ${normalizeTerminalText(line)}`),
+    `[exit] code ${summary.exit_code ?? "unknown"}`,
   ].filter((line) => line.trim().length > 0);
 }
 
@@ -2847,12 +3571,12 @@ function hasStreamedLivePayload(lines: string[]) {
 
 function commandPreviewLabel(probe: ProbeDescriptor, preview: CommandPreview) {
   const labels: Record<string, string> = {
-    "public.egress_check": "PowerShell: public egress IP + DNS path",
-    "dns.leak_check": "PowerShell: configured DNS + observed resolver path",
-    "public.port_check": "PowerShell: remote port plan",
-    "recon.whois_rdap": "PowerShell: RDAP lookup",
-    "web.http_probe": "PowerShell: HTTP status, headers, title",
-    "web.tls_cert": "PowerShell: TLS handshake + certificate details",
+    "public.egress_check": "SonarNwork CLI: public egress IP + DNS path",
+    "dns.leak_check": "SonarNwork CLI: configured DNS + observed resolver path",
+    "public.port_check": "SonarNwork CLI: remote port plan",
+    "recon.whois_rdap": "SonarNwork CLI: RDAP lookup",
+    "web.http_probe": "SonarNwork CLI: HTTP status, headers, title",
+    "web.tls_cert": "SonarNwork CLI: TLS handshake + certificate details",
   };
 
   return labels[probe.id] ?? preview.display;

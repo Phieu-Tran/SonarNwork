@@ -3,6 +3,7 @@ pub mod entity;
 pub mod error;
 pub mod graph;
 pub mod probe;
+pub mod scanner;
 pub mod scope;
 
 pub use app::{
@@ -21,5 +22,9 @@ pub use probe::{
     EdgeDraft, Finding, HttpProbeProfile, PingProfile, PortCheckProfile, Probe, ProbeCategory,
     ProbeCtx, ProbeDescriptor, ProbeOutput, ProbeRegistry, ProbeRequirement, ProbeRisk,
     ProbeStatus, ProbeWarning, Severity, SummaryRow, TraceProfile, TraceProtocol,
+};
+pub use scanner::{
+    summarize_scanner_output, ExternalScannerKind, ExternalScannerMode, ExternalScannerPorts,
+    ExternalScannerProfile,
 };
 pub use scope::{ActionClass, ScopeDecision, ScopeGuard, ScopePolicy};

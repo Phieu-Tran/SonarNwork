@@ -1,24 +1,26 @@
 use anyhow::Context;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{error::ErrorKind, Args, CommandFactory, Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use sonar_core::{
-    command_target, ActionClass, AppCore, DnsLookupProfile, Entity, EntityKind, PingProfile,
-    PivotGraph, PortCheckProfile, ProbeDescriptor, ProbeOutput, ProbeStatus, ProbeTarget,
-    TraceProfile, TraceProtocol,
+    command_target, summarize_scanner_output, ActionClass, AppCore, DnsLookupProfile, Entity,
+    EntityKind, ExternalScannerKind, ExternalScannerMode, ExternalScannerPorts,
+    ExternalScannerProfile, PingProfile, PivotGraph, PortCheckProfile, ProbeDescriptor,
+    ProbeOutput, ProbeStatus, ProbeTarget, TraceProfile, TraceProtocol,
 };
 use sonar_tools::ToolCatalog;
+use std::io::{self, Write};
 
 #[derive(Debug, Parser)]
 #[command(name = "sonarnwork")]
 #[command(version)]
 #[command(about = "SonarNwork CLI shell backed by sonar-core")]
 #[command(
-    after_help = "Beginner examples:\n  sonarnwork check example.com\n  sonarnwork ping 1.1.1.1 --count 4 --timeout 1000\n  sonarnwork trace 1.1.1.1 --tcp --port 443\n  sonarnwork dns example.com --record A\n  sonarnwork myip"
+    after_help = "Examples:\n  sonarnwork check example.com\n  sonarnwork ping 1.1.1.1 --count 4 --timeout 1000\n  sonarnwork trace 1.1.1.1 --tcp --port 443\n  sonarnwork dns example.com --record A\n  sonarnwork scanner run nmap 103.29.26.0/24 --profile version --ports all --yes\n  sonarnwork myip"
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Command,
+    command: Option<Command>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -98,6 +100,10 @@ enum Command {
         #[command(subcommand)]
         command: ScopeCommand,
     },
+    Scanner {
+        #[command(subcommand)]
+        command: ScannerCommand,
+    },
     Tools {
         #[command(subcommand)]
         command: ToolsCommand,
@@ -141,6 +147,68 @@ enum ScopeCommand {
         #[arg(long)]
         json: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ScannerCommand {
+    Run {
+        #[arg(value_enum)]
+        tool: ScannerToolArg,
+        target: String,
+        #[arg(long, value_enum)]
+        profile: Option<ScannerProfileArg>,
+        #[arg(long)]
+        ports: Option<String>,
+        /// Confirm that you own or are authorized to scan this target.
+        #[arg(long, alias = "i-am-authorized")]
+        yes: bool,
+        #[command(flatten)]
+        output: OutputOptions,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum ScannerToolArg {
+    Nmap,
+    Nuclei,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+#[value(rename_all = "snake_case")]
+enum ScannerProfileArg {
+    Default,
+    Fast,
+    Version,
+    Deep,
+    UdpQuick,
+    Safe,
+    HttpExposure,
+    KnownVulns,
+    Full,
+}
+
+impl From<ScannerToolArg> for ExternalScannerKind {
+    fn from(value: ScannerToolArg) -> Self {
+        match value {
+            ScannerToolArg::Nmap => Self::Nmap,
+            ScannerToolArg::Nuclei => Self::Nuclei,
+        }
+    }
+}
+
+impl From<ScannerProfileArg> for ExternalScannerMode {
+    fn from(value: ScannerProfileArg) -> Self {
+        match value {
+            ScannerProfileArg::Default | ScannerProfileArg::Fast => Self::Default,
+            ScannerProfileArg::Version => Self::NmapVersion,
+            ScannerProfileArg::Deep => Self::NmapServiceDeep,
+            ScannerProfileArg::UdpQuick => Self::NmapUdpQuick,
+            ScannerProfileArg::Safe => Self::NucleiSafe,
+            ScannerProfileArg::HttpExposure => Self::NucleiHttpExposure,
+            ScannerProfileArg::KnownVulns => Self::NucleiKnownVulns,
+            ScannerProfileArg::Full => Self::NucleiFull,
+        }
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -207,9 +275,16 @@ impl From<ActionArg> for ActionClass {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let core = AppCore::active_network_scan();
+    let Some(command) = cli.command else {
+        return run_shell().await;
+    };
 
-    match cli.command {
+    let core = AppCore::active_network_scan();
+    run_command(command, &core).await
+}
+
+async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
+    match command {
         Command::Check {
             target,
             output: output_options,
@@ -425,6 +500,18 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
         },
+        Command::Scanner { command } => match command {
+            ScannerCommand::Run {
+                tool,
+                target,
+                profile,
+                ports,
+                yes,
+                output,
+            } => {
+                run_scanner_command(tool.into(), profile, ports, target, yes, output)?;
+            }
+        },
         Command::Tools { command } => match command {
             ToolsCommand::Catalog { json } => {
                 let catalog = ToolCatalog::phase_zero_defaults();
@@ -445,11 +532,339 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn run_shell() -> anyhow::Result<()> {
+    let core = AppCore::active_network_scan();
+    print_shell_banner(&core);
+
+    if let Ok(command) = std::env::var("SONARNWORK_SHELL_AUTORUN") {
+        let command = command.trim();
+        if !command.is_empty() {
+            println!("sonarnwork > {command}");
+            run_shell_command(command, &core).await;
+            println!();
+        }
+    }
+
+    loop {
+        print!("sonarnwork > ");
+        io::stdout().flush().context("flush shell prompt")?;
+
+        let mut line = String::new();
+        if io::stdin()
+            .read_line(&mut line)
+            .context("read shell input")?
+            == 0
+        {
+            println!();
+            break;
+        }
+
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        match line.to_ascii_lowercase().as_str() {
+            "exit" | "quit" => break,
+            "clear" | "cls" => {
+                print!("\x1b[2J\x1b[H");
+                print_shell_banner(&core);
+                continue;
+            }
+            "help" | "?" => {
+                print_shell_help();
+                continue;
+            }
+            _ => run_shell_command(line, &core).await,
+        }
+
+        println!();
+    }
+
+    Ok(())
+}
+
+async fn run_shell_command(line: &str, core: &AppCore) {
+    match parse_shell_command(line) {
+        Ok(Some(command)) => {
+            if let Err(err) = run_command(command, core).await {
+                eprintln!("error: {err:#}");
+            }
+        }
+        Ok(None) => {}
+        Err(err)
+            if matches!(
+                err.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            ) =>
+        {
+            print!("{err}");
+        }
+        Err(err) => {
+            eprint!("{err}");
+        }
+    }
+}
+
+fn parse_shell_command(line: &str) -> Result<Option<Command>, clap::Error> {
+    let mut args = split_shell_line(line)
+        .map_err(|message| Cli::command().error(ErrorKind::InvalidValue, message))?;
+    if args.is_empty() {
+        return Ok(None);
+    }
+
+    if !args
+        .first()
+        .is_some_and(|arg| arg.eq_ignore_ascii_case("sonarnwork"))
+    {
+        args.insert(0, "sonarnwork".into());
+    }
+
+    Cli::try_parse_from(args).map(|cli| cli.command)
+}
+
+fn split_shell_line(line: &str) -> Result<Vec<String>, String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut chars = line.chars();
+    let mut quote: Option<char> = None;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\\' => {
+                if let Some(next) = chars.next() {
+                    current.push(next);
+                } else {
+                    current.push(ch);
+                }
+            }
+            '\'' | '"' if quote == Some(ch) => {
+                quote = None;
+            }
+            '\'' | '"' if quote.is_none() => {
+                quote = Some(ch);
+            }
+            ch if ch.is_whitespace() && quote.is_none() => {
+                if !current.is_empty() {
+                    args.push(std::mem::take(&mut current));
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if let Some(open_quote) = quote {
+        return Err(format!("unterminated {open_quote} quote"));
+    }
+
+    if !current.is_empty() {
+        args.push(current);
+    }
+
+    Ok(args)
+}
+
+fn print_shell_banner(core: &AppCore) {
+    let info = core.app_info();
+
+    println!(
+        r#"
+  ____   ___  _   _    _    ____  _   ___        _____  ____  _  __
+ / ___| / _ \| \ | |  / \  |  _ \| \ | \ \      / / _ \|  _ \| |/ /
+ \___ \| | | |  \| | / _ \ | |_) |  \| |\ \ /\ / / | | | |_) | ' /
+  ___) | |_| | |\  |/ ___ \|  _ <| |\  | \ V  V /| |_| |  _ <| . \
+ |____/ \___/|_| \_/_/   \_\_| \_\_| \_|  \_/\_/  \___/|_| \_\_|\_\
+"#
+    );
+    println!("SonarNwork CLI Shell  {}", info.version);
+    println!("{}", info.contract);
+    println!();
+    println!("Mode   : interactive operator console");
+    println!("Scope  : local checks, DNS, trace, ports, probes, and scanners");
+    println!("Input  : type commands below without the program name");
+    println!("Try    : help | probe list | myip | scanner run nmap 103.29.26.0/24 --profile version --ports all --yes | exit");
+    println!();
+}
+
+fn print_shell_help() {
+    println!("Interactive commands:");
+    println!("  help                         show this shell help");
+    println!("  clear                        redraw the banner");
+    println!("  exit                         close the shell");
+    println!();
+    println!("Run SonarNwork commands directly:");
+    println!("  check example.com");
+    println!("  ping 1.1.1.1 --count 4 --timeout 1000");
+    println!("  trace 1.1.1.1 --tcp --port 443");
+    println!("  dns example.com --record A");
+    println!("  probe list");
+    println!("  probe run core.describe_entity 1.1.1.1");
+    println!("  scanner run nmap 103.29.26.0/24 --profile version --ports all --yes");
+    println!("  myip");
+    println!();
+    println!("Command help still works:");
+    println!("  probe --help");
+    println!("  scanner run --help");
+}
+
 #[derive(Serialize)]
 struct ProbeRunView {
     descriptor: ProbeDescriptor,
     output: ProbeOutput,
     graph: PivotGraph,
+}
+
+#[derive(Serialize)]
+struct ScannerRunView {
+    tool_id: String,
+    target: String,
+    command: String,
+    exit_code: Option<i32>,
+    output: ProbeOutput,
+}
+
+fn run_scanner_command(
+    kind: ExternalScannerKind,
+    profile: Option<ScannerProfileArg>,
+    ports: Option<String>,
+    target: String,
+    yes: bool,
+    output_options: OutputOptions,
+) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        yes,
+        "confirm that you own or are authorized to scan this target with --yes"
+    );
+
+    let tool_id = kind.tool_id();
+    let mode = scanner_profile_for_tool(kind, profile)?;
+    let port_spec = scanner_ports_for_tool(kind, ports)?;
+    ensure_scanner_mode_matches_kind(kind, mode)?;
+    let profile = ExternalScannerProfile::new(kind, target.clone())?
+        .with_mode(mode)
+        .with_ports(port_spec)?;
+    let runtime = ToolCatalog::phase_zero_defaults().runtime_status(tool_id)?;
+    anyhow::ensure!(
+        runtime.available,
+        "{}",
+        runtime
+            .error
+            .unwrap_or_else(|| format!("{tool_id} is not installed"))
+    );
+    let executable = runtime
+        .executable
+        .with_context(|| format!("{tool_id} executable path is unavailable"))?;
+    let invocation = profile.invocation(&executable);
+    let command_display = invocation.display();
+    let output = std::process::Command::new(&invocation.program)
+        .args(&invocation.args)
+        .output()
+        .with_context(|| format!("run {command_display}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let stdout_lines = stdout.lines().map(str::to_string).collect::<Vec<_>>();
+    let stderr_lines = stderr.lines().map(str::to_string).collect::<Vec<_>>();
+    let mut probe_output =
+        summarize_scanner_output(kind, output.status.code(), &stdout_lines, &stderr_lines);
+    probe_output.raw = Some(json!({
+        "command": command_display.clone(),
+        "exitCode": output.status.code(),
+        "stdout": stdout,
+        "stderr": stderr,
+    }));
+
+    let view = ScannerRunView {
+        tool_id: tool_id.into(),
+        target,
+        command: command_display,
+        exit_code: output.status.code(),
+        output: probe_output,
+    };
+    print_scanner_run(&view, output_options)?;
+
+    if !output.status.success() {
+        anyhow::bail!("scanner exited with {}", output.status);
+    }
+
+    Ok(())
+}
+
+fn scanner_profile_for_tool(
+    kind: ExternalScannerKind,
+    profile: Option<ScannerProfileArg>,
+) -> anyhow::Result<ExternalScannerMode> {
+    let profile = profile.unwrap_or(match kind {
+        ExternalScannerKind::Nmap => ScannerProfileArg::Version,
+        ExternalScannerKind::Nuclei => ScannerProfileArg::Safe,
+    });
+    let mode = profile.into();
+    ensure_scanner_mode_matches_kind(kind, mode)?;
+    Ok(mode)
+}
+
+fn scanner_ports_for_tool(
+    kind: ExternalScannerKind,
+    ports: Option<String>,
+) -> anyhow::Result<ExternalScannerPorts> {
+    match kind {
+        ExternalScannerKind::Nmap => Ok(parse_scanner_ports(ports.as_deref().unwrap_or("top"))?),
+        ExternalScannerKind::Nuclei => {
+            anyhow::ensure!(ports.is_none(), "--ports only applies to nmap");
+            Ok(ExternalScannerPorts::Default)
+        }
+    }
+}
+
+fn parse_scanner_ports(value: &str) -> anyhow::Result<ExternalScannerPorts> {
+    match value.trim() {
+        "" | "default" => Ok(ExternalScannerPorts::Default),
+        "top" => Ok(ExternalScannerPorts::Top),
+        "all" | "-" | "-p-" => Ok(ExternalScannerPorts::All),
+        custom => Ok(ExternalScannerPorts::Custom(custom.to_string())),
+    }
+}
+
+fn ensure_scanner_mode_matches_kind(
+    kind: ExternalScannerKind,
+    mode: ExternalScannerMode,
+) -> anyhow::Result<()> {
+    let valid = matches!(mode, ExternalScannerMode::Default)
+        || matches!(
+            (kind, mode),
+            (
+                ExternalScannerKind::Nmap,
+                ExternalScannerMode::NmapTopPorts
+                    | ExternalScannerMode::NmapVersion
+                    | ExternalScannerMode::NmapServiceDeep
+                    | ExternalScannerMode::NmapUdpQuick
+            ) | (
+                ExternalScannerKind::Nuclei,
+                ExternalScannerMode::NucleiSafe
+                    | ExternalScannerMode::NucleiHttpExposure
+                    | ExternalScannerMode::NucleiKnownVulns
+                    | ExternalScannerMode::NucleiFull
+            )
+        );
+    anyhow::ensure!(valid, "scanner mode does not apply to {}", kind.tool_id());
+    Ok(())
+}
+
+fn print_scanner_run(view: &ScannerRunView, options: OutputOptions) -> anyhow::Result<()> {
+    match options.mode() {
+        OutputMode::Json => print_json(view),
+        OutputMode::Raw => print_raw_output(&view.output),
+        OutputMode::Summary => {
+            println!(
+                "{}",
+                view.output
+                    .summary
+                    .as_deref()
+                    .unwrap_or("Scanner completed.")
+            );
+            print_summary_rows(&view.output);
+            Ok(())
+        }
+    }
 }
 
 fn beginner_probe_id(entity: &Entity, probes: &[ProbeDescriptor]) -> Option<&'static str> {
@@ -618,6 +1033,7 @@ fn print_guide() {
     println!("  sonarnwork trace 1.1.1.1 --tcp --port 443");
     println!("  sonarnwork dns example.com --record A");
     println!("  sonarnwork port 127.0.0.1 --port 443");
+    println!("  sonarnwork scanner run nmap 103.29.26.0/24 --profile version --ports all --yes");
     println!("  sonarnwork myip");
     println!();
     println!("Output modes:");

@@ -208,10 +208,6 @@ pub fn parse_entity_guess(input: impl AsRef<str>) -> Result<Entity> {
         return Err(SonarError::InvalidTarget(input.as_ref().to_string()));
     }
 
-    if let Ok(url) = Url::parse(raw) {
-        return Ok(Entity::Url(url));
-    }
-
     if let Ok(socket) = raw.parse::<SocketAddr>() {
         return Ok(Entity::Port(PortEntity {
             ip: socket.ip(),
@@ -219,6 +215,14 @@ pub fn parse_entity_guess(input: impl AsRef<str>) -> Result<Entity> {
             proto: L4Proto::Tcp,
             state: PortState::Unknown,
         }));
+    }
+
+    if let Some(url) = parse_domain_port_as_url(raw) {
+        return Ok(Entity::Url(url));
+    }
+
+    if let Ok(url) = Url::parse(raw) {
+        return Ok(Entity::Url(url));
     }
 
     if let Ok(ip) = raw.parse::<IpAddr>() {
@@ -234,6 +238,23 @@ pub fn parse_entity_guess(input: impl AsRef<str>) -> Result<Entity> {
     }
 
     DomainName::new(raw).map(Entity::Domain)
+}
+
+fn parse_domain_port_as_url(raw: &str) -> Option<Url> {
+    if raw.contains("://") || raw.contains('/') || raw.contains('?') || raw.contains('#') {
+        return None;
+    }
+
+    let (host, port) = raw.rsplit_once(':')?;
+    if host.is_empty() || port.parse::<u16>().ok()? == 0 {
+        return None;
+    }
+    if host.parse::<IpAddr>().is_ok() {
+        return None;
+    }
+
+    let domain = DomainName::new(host).ok()?;
+    Url::parse(&format!("https://{}:{port}", domain.normalized)).ok()
 }
 
 fn normalize_domain(value: &str) -> String {
@@ -280,6 +301,20 @@ mod tests {
         let entity = parse_entity_guess("1.1.1.1:443").unwrap();
 
         assert_eq!(entity.id().as_str(), "port:1.1.1.1:443/tcp");
+    }
+
+    #[test]
+    fn parses_domain_port_as_url_with_default_scheme() {
+        let entity = parse_entity_guess("example.com:443").unwrap();
+
+        assert_eq!(entity.id().as_str(), "url:https://example.com");
+        match entity {
+            Entity::Url(url) => {
+                assert_eq!(url.host_str(), Some("example.com"));
+                assert_eq!(url.port_or_known_default(), Some(443));
+            }
+            other => panic!("expected url entity, got {other:?}"),
+        }
     }
 
     #[test]

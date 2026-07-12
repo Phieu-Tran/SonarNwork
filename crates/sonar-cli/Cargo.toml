@@ -18,3 +18,7 @@ sonar-core = { path = "../sonar-core" }
 sonar-report = { path = "../sonar-report" }
 sonar-tools = { path = "../sonar-tools" }
 tokio.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"

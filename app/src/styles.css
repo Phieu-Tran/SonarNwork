@@ -239,8 +239,7 @@ summary:focus-visible {
 }
 
 .topTabs button,
-.iconTextButton,
-.segmented button {
+.iconTextButton {
   min-height: 26px;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -256,8 +255,7 @@ summary:focus-visible {
 }
 
 .topTabs button:hover,
-.iconTextButton:hover,
-.segmented button:hover {
+.iconTextButton:hover {
   color: var(--text);
   background: var(--surface-3);
 }
@@ -600,26 +598,6 @@ summary:focus-visible {
 .nextActions button:hover,
 .refreshButton:hover {
   border-color: var(--line-strong);
-  background: var(--surface-3);
-}
-
-.segmented {
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 3px;
-  background: var(--surface-2);
-}
-
-.segmented button {
-  min-height: 26px;
-  padding: 0 8px;
-}
-
-.segmented button.active {
-  color: var(--text);
   background: var(--surface-3);
 }
 
@@ -966,6 +944,287 @@ summary:focus-visible {
   margin-top: 10px;
 }
 
+.scannerRunner {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.scannerPackageStatus {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--faint);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-3);
+}
+
+.scannerPackageStatus.ready {
+  border-left-color: var(--ok);
+}
+
+.scannerPackageStatus.missing {
+  border-left-color: var(--warning);
+}
+
+.scannerPackageStatus span,
+.scannerCommandPreview span {
+  color: var(--faint);
+  font-size: 9.5px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.scannerPackageStatus strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.scannerPackageStatus small {
+  display: block;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.scannerPackageStatus em {
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.scannerTargetRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.scannerTargetRow label,
+.scannerScope {
+  display: grid;
+  gap: 5px;
+}
+
+.scannerTargetRow label span {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.scannerTargetRow input,
+.scannerTargetRow select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-2);
+  font-family:
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.scannerTargetRow select {
+  appearance: none;
+}
+
+.scannerModeGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.scannerModeGrid button {
+  display: grid;
+  align-content: start;
+  gap: 3px;
+  min-height: 54px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px;
+  color: var(--muted);
+  background: var(--surface-2);
+  text-align: left;
+}
+
+.scannerModeGrid button:hover,
+.scannerModeGrid button.active {
+  border-color: var(--line-strong);
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.scannerModeGrid button.active {
+  box-shadow: inset 0 0 0 1px var(--workflow-accent);
+}
+
+.scannerModeGrid button:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.scannerModeGrid strong {
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.15;
+}
+
+.scannerModeGrid span {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.25;
+}
+
+.scannerScope {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 9px 10px;
+  color: var(--muted);
+  background: var(--surface-2);
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.35;
+}
+
+.scannerScope input {
+  margin-top: 2px;
+}
+
+.scannerActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.scannerCommandPreview,
+.scannerResult,
+.scannerError {
+  display: grid;
+  gap: 5px;
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+}
+
+.scannerCommandPreview code {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px;
+  color: var(--direction-accent);
+  background: var(--surface-2);
+  font-family:
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.scannerLiveConsole {
+  width: 100%;
+  min-height: 112px;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid rgb(255 255 255 / 10%);
+  border-radius: 8px;
+  margin: 0;
+  padding: 10px;
+  color: #f8f4ea;
+  background: #11100d;
+  font-family:
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.scannerResult {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.scannerResult strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.nmapPortMap {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 8px;
+  background: var(--surface-2);
+}
+
+.nmapHostRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.45fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.nmapHostRow > strong {
+  color: var(--text);
+  font-family:
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.nmapHostRow > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.openPortPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--workflow-accent), white 25%);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--workflow-accent), transparent 78%);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--workflow-accent), transparent 75%);
+  font-family:
+    "Cascadia Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.openPortPill small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.scannerError {
+  color: var(--danger);
+  font-size: 11px;
+  font-weight: 750;
+}
+
 .toolUpdatePlan {
   display: grid;
   gap: 4px;
@@ -1294,6 +1553,10 @@ summary:focus-visible {
   .checkGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .scannerModeGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 700px) {
@@ -1313,7 +1576,10 @@ summary:focus-visible {
   .compactGrid,
   .runControls,
   .runControls.targetless,
-  .factGrid {
+  .factGrid,
+  .scannerTargetRow,
+  .scannerModeGrid,
+  .nmapHostRow {
     grid-template-columns: 1fr;
   }
 

@@ -104,13 +104,18 @@ remote-scan provider.
 **Rationale:** Planning without implicit execution makes provider capability,
 token handoff, and authorization boundaries visible.
 
-## 0012. Managed Tools Are Policy Metadata, Not a Bypass
+## 0012. Managed Tools Are Optional Plugins, Not a Bypass
 
-**Decision:** `sonar-tools` describes tool sources, capabilities, install/update
-strategy, and risk. A managed-tool workflow does not bypass probe readiness or
-scope enforcement.
+**Decision:** `sonar-tools` owns the single plugin descriptor and lifecycle
+contract: source, target kinds, capabilities, interactions, install/update
+strategy, risk, and scope requirement. Tools are never bundled. Nmap uses an
+official system-installer handoff; Nuclei may be installed explicitly into
+per-user application data. Install and update are manual user actions.
 
-**Rationale:** Tool availability and authorization are separate concerns.
+**Rationale:** Tool availability, product meaning, and authorization are
+separate concerns. A validated backend contract prevents frontend metadata
+drift and prevents a port-discovery tool from being substituted for a template
+scanner. A managed-tool workflow still cannot bypass scope enforcement.
 
 ## 0013. Tauri Owns Desktop Transport and Process Lifecycle
 

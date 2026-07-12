@@ -23,7 +23,7 @@ Tauri command adapter -----------------> sonar-core
 | --- | --- |
 | `crates/sonar-core` | Entities, probe contracts and registry, scope enforcement, command construction, output interpretation, workflows, remote-vantage plans, and pivot graphs. |
 | `crates/sonar-os` | Cross-platform network inventory behind the `OsNet` interface: interfaces, listeners, firewall state, and configured resolvers. |
-| `crates/sonar-tools` | Policy and metadata for managed external tools. It describes detection, install/update strategy, risk, and capabilities; it is not the probe executor. |
+| `crates/sonar-tools` | Optional-tool plugin contract and lifecycle policy. It owns detection, install/update strategy, target kinds, risk/scope, capabilities, interactions, and the managed Nuclei runtime adapter; scanner meaning and argv construction remain in core. |
 | `crates/sonar-report` | JSON and Markdown rendering for completed runs and graphs. |
 | `crates/sonar-cli` | Clap shell, output-mode selection, beginner guidance, and terminal rendering. |
 | `app/src-tauri` | Tauri IPC adapter, live child-process lifecycle, terminal launching, and desktop-specific network summary. |
@@ -168,9 +168,17 @@ execution. `AppCore::remote_vantage_plan` maps provider/measurement combinations
 to allowed probe IDs and warnings. Token handoff, locations, and explicit scope
 remain prerequisites for a future remote executor.
 
-Managed-tool support is catalog and update-policy metadata. Nmap and Nuclei
-workflows may appear in the UI, but the tool catalog does not bypass probe
-status, risk, or scope enforcement.
+Managed tools are optional plugins and are never bundled with the application.
+The backend catalog is the single policy source; the frontend does not maintain
+a second Nmap/Nuclei catalog. Nmap uses an official system-installer handoff and
+is detected from supported system locations/PATH. Nuclei can be installed or
+updated explicitly into per-user application data. Opening a page or refreshing
+runtime status never installs or updates a tool.
+
+Nmap and Nuclei have separate contracts. Nmap exposes bounded network/service
+discovery; Nuclei exposes bounded URL template scanning with intrusive scope and
+OAST disabled by default. Both expose Preview, Run in app, and Open in CLI from
+the same core-owned argv invocation and cannot bypass scope enforcement.
 
 ## Extension Rules
 

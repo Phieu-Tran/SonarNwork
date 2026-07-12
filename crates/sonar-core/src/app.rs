@@ -1,3 +1,5 @@
+use std::net::IpAddr;
+
 use serde::{Deserialize, Serialize};
 
 use crate::entity::{parse_entity_guess, Entity, EntityKind};
@@ -150,6 +152,33 @@ impl AppCore {
         Self::for_profile(ProbeProfile::ActiveNetworkScan)
     }
 
+    pub fn for_explicit_target(target: &ProbeTarget) -> Result<Self> {
+        let entity = Self::default().resolve_probe_target(target)?;
+        let policy = match &entity {
+            Entity::Ip(ip) => ScopePolicy::default().allow_ip(*ip),
+            Entity::Domain(domain) => ScopePolicy::default().allow_domain(&domain.normalized),
+            Entity::Host(host) => match host.ip {
+                Some(ip) => ScopePolicy::default().allow_ip(ip),
+                None => ScopePolicy::default().allow_domain(&host.name),
+            },
+            Entity::Port(port) => ScopePolicy::default().allow_ip(port.ip),
+            Entity::Url(url) => {
+                let host = url
+                    .host_str()
+                    .ok_or_else(|| SonarError::InvalidTarget(url.to_string()))?;
+                match host.parse::<IpAddr>() {
+                    Ok(ip) => ScopePolicy::default().allow_ip(ip),
+                    Err(_) => ScopePolicy::default().allow_domain(host),
+                }
+            }
+            _ => return Err(SonarError::InvalidTarget(entity.stable_key())),
+        };
+
+        let mut core = Self::default();
+        core.scope = ScopeGuard::new(policy);
+        Ok(core)
+    }
+
     pub fn new(scope: ScopeGuard, probes: ProbeRegistry) -> Self {
         Self { scope, probes }
     }
@@ -296,18 +325,20 @@ impl AppCore {
             (_, RemoteMeasurementKind::Dns) => vec!["dns.lookup".into()],
             (_, RemoteMeasurementKind::Mtr) => vec!["connectivity.mtr".into()],
             (_, RemoteMeasurementKind::Http) => vec!["web.http_probe".into()],
-            (RemoteVantageProvider::Globalping, RemoteMeasurementKind::TcpPort) => Vec::new(),
+            (RemoteVantageProvider::Globalping, RemoteMeasurementKind::TcpPort) => {
+                vec!["public.port_check".into()]
+            }
             (RemoteVantageProvider::SonarNworkRemoteScan, RemoteMeasurementKind::TcpPort) => {
                 vec!["public.port_check".into()]
             }
         };
         let warning = match (provider, measurement) {
             (RemoteVantageProvider::Globalping, RemoteMeasurementKind::TcpPort) => Some(
-                "Globalping-style vantage does not run public ingress port checks; use SonarNwork remote-scan with explicit scope."
+                "Globalping-style TCP vantage checks whether the target port is reachable from outside your local network. Local netstat/listeners are evidence only, not the public ingress verdict."
                     .into(),
             ),
             (RemoteVantageProvider::Globalping, _) => Some(
-                "Globalping-style vantage is for ping, traceroute, DNS, MTR, and HTTP measurements; public port checks require explicit SonarNwork remote-scan scope."
+                "Globalping-style vantage is for outside-in measurements; use TCP port for public ingress and local listener checks only as supporting evidence."
                     .into(),
             ),
             (RemoteVantageProvider::SonarNworkRemoteScan, RemoteMeasurementKind::TcpPort) => {
@@ -753,7 +784,11 @@ fn register_default_probes(registry: &mut ProbeRegistry) {
         ProbeCategory::Dns,
         ProbeRisk::SafeActive,
         vec![ProbeRequirement::Network],
-        current_internet_path.clone(),
+        endpointish
+            .iter()
+            .copied()
+            .chain(current_internet_path.iter().copied())
+            .collect(),
         OsCommandKind::DnsLeakCheck,
     ));
     registry.register(OsCommandProbe::new_with_status(
@@ -852,6 +887,24 @@ mod tests {
         assert!(probe_ids.iter().any(|id| id == "connectivity.fast_trace"));
         assert!(probe_ids.iter().any(|id| id == "connectivity.mtr"));
         assert!(probe_ids.iter().any(|id| id == "connectivity.path_mtu"));
+    }
+
+    #[test]
+    fn dns_leak_check_accepts_explicit_cli_targets() {
+        let core = AppCore::default();
+        for target in ["example.com", "1.1.1.1"] {
+            let entity = core.parse_entity(target).unwrap();
+            let probe_ids = core
+                .available_probes(&entity)
+                .into_iter()
+                .map(|probe| probe.id)
+                .collect::<Vec<_>>();
+
+            assert!(
+                probe_ids.iter().any(|id| id == "dns.leak_check"),
+                "dns.leak_check should apply to {target}"
+            );
+        }
     }
 
     #[test]
@@ -988,7 +1041,7 @@ mod tests {
     }
 
     #[test]
-    fn globalping_tcp_port_plan_excludes_public_port_check() {
+    fn globalping_tcp_port_plan_allows_public_port_check() {
         let core = AppCore::default();
         let plan = core.remote_vantage_plan(
             RemoteVantageProvider::Globalping,
@@ -996,7 +1049,10 @@ mod tests {
             ProbeTarget::Input("example.com:443".into()),
         );
 
-        assert!(plan.allowed_probe_ids.is_empty());
+        assert!(plan
+            .allowed_probe_ids
+            .iter()
+            .any(|id| id == "public.port_check"));
         assert!(plan.warning.is_some());
     }
 

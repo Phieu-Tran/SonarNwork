@@ -31,7 +31,6 @@ export const UI_COPY = {
     enterTarget: "Enter target",
     runLive: "Live output",
     openTerminal: "Terminal",
-    terminalShell: "Terminal shell",
     runSelectedTool: "Run selected check",
     toolUnavailable: "Check unavailable",
     runLiveTitle: "Run and stream output in SonarNwork",
@@ -105,7 +104,6 @@ export const UI_COPY = {
     enterTarget: "Nhap target",
     runLive: "Output live",
     openTerminal: "Terminal",
-    terminalShell: "Terminal",
     runSelectedTool: "Chay kiem tra dang chon",
     toolUnavailable: "Kiem tra chua kha dung",
     runLiveTitle: "Chay va stream output trong SonarNwork",
@@ -234,8 +232,8 @@ export const GROUP_COPY: Record<
       description: "Public ownership and registration lookups.",
     },
     vi: {
-      title: "Tra cuu / Intel",
-      description: "Tra cuu ownership va dang ky public.",
+      title: "Tra cứu / Intel",
+      description: "Tra cứu chủ sở hữu và đăng ký công khai.",
     },
   },
   core: {
@@ -292,8 +290,8 @@ export const WORKFLOW_COPY: Record<
       description: "Local listener plus scoped checks from the outside toward your service.",
     },
     vi: {
-      title: "3. Internet -> service cua toi",
-      description: "Listener local va kiem tra co scope tu ben ngoai vao service.",
+      title: "3. Internet -> service của tôi",
+      description: "Listener local và kiểm tra có phạm vi từ bên ngoài vào service.",
     },
   },
 };
@@ -460,8 +458,8 @@ export const TOOL_COPY: Record<
       description: "Look up public ownership and registration data.",
     },
     vi: {
-      name: "RDAP / ownership",
-      description: "Tra cuu ownership va thong tin dang ky public.",
+      name: "RDAP / chủ sở hữu",
+      description: "Tra cứu chủ sở hữu và thông tin đăng ký công khai.",
     },
   },
   "core.describe_entity": {
