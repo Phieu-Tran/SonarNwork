@@ -25,6 +25,7 @@ jobs:
     name: Windows desktop and CLI
     runs-on: windows-latest
     permissions:
+      checks: write
       contents: read
       id-token: write
       attestations: write
