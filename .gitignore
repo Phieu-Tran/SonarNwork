@@ -1,10 +1,43 @@
 /target/
+/.cargo-target-clippy/
 /app/node_modules/
 /app/dist/
 /app/src-tauri/gen/
 /app/src-tauri/target/
 /.sonarnwork-test/
 /.playwright-mcp/
+/preview-*.png
+/sonarnwork-*.png
+/scripts/gui-e2e/
+
+# Local agent, research, and delivery workflows
+/AGENTS.md
+/CLAUDE.md
+/GEMINI.md
+/opencode.json
+/.agents/
+/.claude/
+/.codex/
+/.serena/
+/.gemini/
+/.delivery/
+/.codebase-memory/
+/plugins/delivery-pipeline/
+
+# Internal planning and test-operation documents (keep product assets public)
+/docs/*.md
+/docs/test/
+
+# Local credentials and signing material
+/.env
+/.env.*
+!/.env.example
+/secrets/
+*.key
+*.pem
+*.pfx
+*.p12
+
 *.log
 *.tmp
 .DS_Store

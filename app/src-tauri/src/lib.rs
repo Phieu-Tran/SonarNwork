@@ -1,26 +1,36 @@
-use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+mod history;
+mod live;
+mod operations;
+
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
-use std::thread;
+use std::process::Command;
 
 use serde::Serialize;
 use sonar_core::{
     summarize_scanner_output, ActionClass, AppCore, AppInfo, CommandInvocation, Entity,
     ExternalScannerKind, ExternalScannerMode, ExternalScannerPorts, ExternalScannerProfile,
-    PivotGraph, ProbeDescriptor, ProbeOutput, ProbeTarget, RemoteMeasurementKind,
-    RemoteVantagePlan, RemoteVantageProvider, ResultInterpretation, WorkflowDescriptor,
+    InteractionCatalog, PivotGraph, ProbeDescriptor, ProbeOutput, ProbeTarget,
+    RemoteMeasurementKind, RemoteVantagePlan, RemoteVantageProvider, ResultInterpretation,
+    WorkflowDescriptor,
 };
 use sonar_tools::{
+    remote::{
+        GlobalpingMeasurementRequest, GlobalpingMeasurementResult, RemotePortCheckRequest,
+        RemotePortCheckResult, RemoteProviderClient,
+    },
     InstallStrategy, ToolCatalog, ToolLifecyclePlan, ToolRuntimeStatus, ToolUpdatePlan,
 };
-use tauri::Emitter;
 
-#[derive(Default)]
-struct LiveProcesses {
-    processes: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
-}
+use history::{
+    compare_probe_runs, delete_probe_run, get_probe_run, list_probe_runs, save_probe_run,
+    HistoryState,
+};
+use live::{run_live_command, LiveProcesses, ProbeLiveSummary};
+use operations::{
+    capture_packets, capture_runtime_status, clear_timeline, collect_device_inventory,
+    list_capture_interfaces, list_monitors, list_timeline, open_capture_handoff, resume_monitors,
+    start_monitor, stop_monitor, OperationsState,
+};
 
 #[tauri::command]
 fn app_info() -> AppInfo {
@@ -47,6 +57,11 @@ fn workflows() -> Vec<WorkflowDescriptor> {
 #[tauri::command]
 fn tools_catalog() -> ToolCatalog {
     ToolCatalog::phase_zero_defaults()
+}
+
+#[tauri::command]
+fn interaction_catalog() -> InteractionCatalog {
+    ToolCatalog::phase_zero_defaults().interaction_catalog()
 }
 
 #[tauri::command]
@@ -105,11 +120,8 @@ async fn update_tool(tool_id: String) -> Result<ToolRuntimeStatus, String> {
 }
 
 fn scanner_kind(tool_id: &str) -> Result<ExternalScannerKind, String> {
-    match tool_id {
-        "nmap" => Ok(ExternalScannerKind::Nmap),
-        "nuclei" => Ok(ExternalScannerKind::Nuclei),
-        _ => Err(format!("tool `{tool_id}` does not expose a scanner runner")),
-    }
+    ExternalScannerKind::from_tool_id(tool_id)
+        .ok_or_else(|| format!("tool `{tool_id}` does not expose a scanner runner"))
 }
 
 fn scanner_invocation(
@@ -172,7 +184,7 @@ fn scanner_cli_invocation(
         target_arg,
     ];
     args.extend(["--profile".into(), scanner_profile_id(kind, mode).into()]);
-    if matches!(kind, ExternalScannerKind::Nmap) {
+    if matches!(kind, ExternalScannerKind::Nmap | ExternalScannerKind::Naabu) {
         args.extend(["--ports".into(), scanner_ports_id(&ports)]);
     }
     args.push("--yes".into());
@@ -191,6 +203,12 @@ fn scanner_mode(
         "" | "default" => match kind {
             ExternalScannerKind::Nmap => ExternalScannerMode::NmapVersion,
             ExternalScannerKind::Nuclei => ExternalScannerMode::NucleiSafe,
+            ExternalScannerKind::Httpx
+            | ExternalScannerKind::Naabu
+            | ExternalScannerKind::Subfinder
+            | ExternalScannerKind::Dnsx
+            | ExternalScannerKind::Trippy
+            | ExternalScannerKind::Nexttrace => ExternalScannerMode::Default,
         },
         "fast" => ExternalScannerMode::Default,
         "version" | "nmap_version" => ExternalScannerMode::NmapVersion,
@@ -254,9 +272,9 @@ fn scanner_ports(
     kind: ExternalScannerKind,
     value: Option<&str>,
 ) -> Result<ExternalScannerPorts, String> {
-    if !matches!(kind, ExternalScannerKind::Nmap) {
+    if !matches!(kind, ExternalScannerKind::Nmap | ExternalScannerKind::Naabu) {
         if value.is_some_and(|value| !value.trim().is_empty()) {
-            return Err("ports only apply to nmap".into());
+            return Err("ports only apply to nmap and naabu".into());
         }
         return Ok(ExternalScannerPorts::Default);
     }
@@ -357,6 +375,30 @@ fn remote_vantage_plan(
 }
 
 #[tauri::command]
+async fn run_globalping_measurement(
+    request: GlobalpingMeasurementRequest,
+) -> Result<GlobalpingMeasurementResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        RemoteProviderClient::new()?.run_globalping(request)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
+async fn run_remote_port_check(
+    request: RemotePortCheckRequest,
+) -> Result<RemotePortCheckResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        RemoteProviderClient::new()?.run_remote_port_check(request)
+    })
+    .await
+    .map_err(|err| err.to_string())?
+    .map_err(|err| err.to_string())
+}
+
+#[tauri::command]
 fn available_probes(input: String) -> Result<Vec<ProbeDescriptor>, String> {
     let core = AppCore::default();
     let entity = core.parse_entity(&input).map_err(|err| err.to_string())?;
@@ -423,7 +465,7 @@ async fn run_probe_live(
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("probe `{probe_id}` does not expose a live command"))?;
     let invocation = invocation_with_override(&core, &target, fallback, command_override)?;
-    let processes = Arc::clone(&live_processes.processes);
+    let processes = live_processes.registry();
 
     tauri::async_runtime::spawn_blocking(move || {
         run_live_command(app, run_id, invocation, processes)
@@ -442,6 +484,8 @@ fn app_core_for_target(target: &ProbeTarget) -> Result<AppCore, String> {
 }
 
 #[tauri::command]
+// Tauri exposes command parameters by name; keeping them flat preserves the stable IPC contract.
+#[allow(clippy::too_many_arguments)]
 async fn run_scanner_live(
     app: tauri::AppHandle,
     live_processes: tauri::State<'_, LiveProcesses>,
@@ -454,7 +498,7 @@ async fn run_scanner_live(
 ) -> Result<ScannerRunView, String> {
     let (kind, invocation) =
         scanner_invocation(&tool_id, &target, scope_confirmed, scan_profile, scan_ports)?;
-    let processes = Arc::clone(&live_processes.processes);
+    let processes = live_processes.registry();
     let summary = tauri::async_runtime::spawn_blocking(move || {
         run_live_command(app, run_id, invocation, processes)
     })
@@ -470,27 +514,7 @@ fn cancel_probe_live(
     live_processes: tauri::State<'_, LiveProcesses>,
     run_id: String,
 ) -> Result<bool, String> {
-    let child = live_processes
-        .processes
-        .lock()
-        .map_err(|_| "live process registry is poisoned".to_string())?
-        .get(&run_id)
-        .cloned();
-
-    let Some(child) = child else {
-        return Ok(false);
-    };
-
-    let mut child = child
-        .lock()
-        .map_err(|_| "live process handle is poisoned".to_string())?;
-
-    if child.try_wait().map_err(|err| err.to_string())?.is_some() {
-        return Ok(false);
-    }
-
-    child.kill().map_err(|err| err.to_string())?;
-    Ok(true)
+    live_processes.cancel(&run_id)
 }
 
 #[derive(Serialize)]
@@ -516,24 +540,6 @@ impl CommandPreview {
             args: invocation.args,
         }
     }
-}
-
-#[derive(Clone, Serialize)]
-struct ProbeLiveEvent {
-    run_id: String,
-    kind: &'static str,
-    line: Option<String>,
-    command: Option<String>,
-    exit_code: Option<i32>,
-    done: bool,
-}
-
-#[derive(Serialize)]
-struct ProbeLiveSummary {
-    command: String,
-    exit_code: Option<i32>,
-    stdout: Vec<String>,
-    stderr: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -695,138 +701,6 @@ fn network_summary_inner() -> Result<NetworkSummary, String> {
     })
 }
 
-fn run_live_command(
-    app: tauri::AppHandle,
-    run_id: String,
-    invocation: CommandInvocation,
-    live_processes: Arc<Mutex<HashMap<String, Arc<Mutex<Child>>>>>,
-) -> Result<ProbeLiveSummary, String> {
-    emit_live(
-        &app,
-        ProbeLiveEvent {
-            run_id: run_id.clone(),
-            kind: "start",
-            line: None,
-            command: Some(invocation.display()),
-            exit_code: None,
-            done: false,
-        },
-    );
-
-    let mut child = Command::new(&invocation.program)
-        .args(&invocation.args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| format!("{}: {err}", invocation.display()))?;
-
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let child = Arc::new(Mutex::new(child));
-
-    live_processes
-        .lock()
-        .map_err(|_| "live process registry is poisoned".to_string())?
-        .insert(run_id.clone(), Arc::clone(&child));
-
-    let (tx, rx) = mpsc::channel::<(&'static str, String)>();
-
-    if let Some(stdout) = stdout {
-        let tx = tx.clone();
-        thread::spawn(move || read_stream("stdout", stdout, tx));
-    }
-
-    if let Some(stderr) = stderr {
-        let tx = tx.clone();
-        thread::spawn(move || read_stream("stderr", stderr, tx));
-    }
-
-    drop(tx);
-
-    let mut stdout_lines = Vec::new();
-    let mut stderr_lines = Vec::new();
-
-    for (kind, line) in rx {
-        if kind == "stderr" {
-            stderr_lines.push(line.clone());
-        } else {
-            stdout_lines.push(line.clone());
-        }
-
-        emit_live(
-            &app,
-            ProbeLiveEvent {
-                run_id: run_id.clone(),
-                kind,
-                line: Some(line),
-                command: None,
-                exit_code: None,
-                done: false,
-            },
-        );
-    }
-
-    let status = child
-        .lock()
-        .map_err(|_| "live process handle is poisoned".to_string())?
-        .wait()
-        .map_err(|err| err.to_string())?;
-    let exit_code = status.code();
-
-    if let Ok(mut processes) = live_processes.lock() {
-        processes.remove(&run_id);
-    }
-
-    emit_live(
-        &app,
-        ProbeLiveEvent {
-            run_id,
-            kind: "exit",
-            line: None,
-            command: None,
-            exit_code,
-            done: true,
-        },
-    );
-
-    Ok(ProbeLiveSummary {
-        command: invocation.display(),
-        exit_code,
-        stdout: stdout_lines,
-        stderr: stderr_lines,
-    })
-}
-
-fn read_stream<R: std::io::Read + Send + 'static>(
-    kind: &'static str,
-    stream: R,
-    tx: mpsc::Sender<(&'static str, String)>,
-) {
-    let mut reader = BufReader::new(stream);
-    let mut buffer = Vec::new();
-
-    loop {
-        buffer.clear();
-        match reader.read_until(b'\n', &mut buffer) {
-            Ok(0) => break,
-            Ok(_) => {
-                let line = String::from_utf8_lossy(&buffer)
-                    .trim_end_matches(['\r', '\n'])
-                    .to_string();
-                let _ = tx.send((kind, line));
-            }
-            Err(err) => {
-                let _ = tx.send(("stderr", format!("stream read failed: {err}")));
-                break;
-            }
-        }
-    }
-}
-
-fn emit_live(app: &tauri::AppHandle, event: ProbeLiveEvent) {
-    let _ = app.emit("probe-live-output", event);
-}
-
 fn invocation_with_override(
     core: &AppCore,
     target: &ProbeTarget,
@@ -845,7 +719,50 @@ fn invocation_with_override(
     core.ensure_allowed_for_target(target, ActionClass::ExternalTool)
         .map_err(|err| err.to_string())?;
 
-    parse_command_line(command_line)
+    let invocation = parse_command_line(command_line)?;
+    validate_command_override(&fallback, &invocation)?;
+    Ok(invocation)
+}
+
+fn validate_command_override(
+    fallback: &CommandInvocation,
+    invocation: &CommandInvocation,
+) -> Result<(), String> {
+    if !same_executable(&fallback.program, &invocation.program) {
+        return Err(format!(
+            "command override executable must remain `{}`",
+            fallback.program
+        ));
+    }
+
+    if fallback.args.len() != invocation.args.len() {
+        return Err("command override cannot add or remove arguments".into());
+    }
+
+    for (expected, candidate) in fallback.args.iter().zip(&invocation.args) {
+        if expected == candidate {
+            continue;
+        }
+
+        let numeric_option_changed =
+            expected.parse::<u64>().is_ok() && candidate.parse::<u64>().is_ok();
+        if !numeric_option_changed {
+            return Err(
+                "command override may only change numeric option values; executable, flags, and target are fixed"
+                    .into(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn same_executable(expected: &str, candidate: &str) -> bool {
+    if cfg!(windows) {
+        expected.eq_ignore_ascii_case(candidate)
+    } else {
+        expected == candidate
+    }
 }
 
 fn parse_command_line(command_line: &str) -> Result<CommandInvocation, String> {
@@ -903,7 +820,7 @@ fn split_command_line(command_line: &str) -> Result<Vec<String>, String> {
 
 fn open_terminal(invocation: CommandInvocation) -> Result<(), String> {
     if cfg!(target_os = "windows") {
-        let invocation = terminal_invocation(invocation);
+        let invocation = terminal_invocation(invocation)?;
         let command_line = terminal_command_line(&invocation);
         Command::new("cmd")
             .args([
@@ -927,13 +844,44 @@ fn open_terminal(invocation: CommandInvocation) -> Result<(), String> {
     Err("opening a terminal is currently implemented for Windows".into())
 }
 
-fn terminal_invocation(mut invocation: CommandInvocation) -> CommandInvocation {
-    if invocation.program.eq_ignore_ascii_case("sonarnwork") {
-        if let Some(program) = resolve_sonarnwork_cli() {
-            invocation.program = program.to_string_lossy().to_string();
-        }
+fn terminal_invocation(mut invocation: CommandInvocation) -> Result<CommandInvocation, String> {
+    if !invocation.program.eq_ignore_ascii_case("sonarnwork") {
+        return Ok(invocation);
     }
-    invocation
+
+    if let Some(program) = resolve_sonarnwork_cli() {
+        invocation.program = program.to_string_lossy().to_string();
+        return Ok(invocation);
+    }
+
+    if let Some(manifest) = resolve_workspace_manifest() {
+        return Ok(cargo_sonarnwork_invocation(manifest, invocation.args));
+    }
+
+    Err(
+        "Không tìm thấy SonarNwork CLI. Hãy build `sonarnwork.exe` hoặc đặt biến SONARNWORK_CLI trước khi mở CLI."
+            .into(),
+    )
+}
+
+fn cargo_sonarnwork_invocation(manifest: PathBuf, cli_args: Vec<String>) -> CommandInvocation {
+    let mut args = vec![
+        "run".into(),
+        "--quiet".into(),
+        "--manifest-path".into(),
+        manifest.to_string_lossy().to_string(),
+        "-p".into(),
+        "sonar-cli".into(),
+        "--bin".into(),
+        "sonarnwork".into(),
+        "--".into(),
+    ];
+    args.extend(cli_args);
+
+    CommandInvocation {
+        program: "cargo".into(),
+        args,
+    }
 }
 
 fn terminal_command_line(invocation: &CommandInvocation) -> String {
@@ -950,7 +898,40 @@ fn terminal_command_line(invocation: &CommandInvocation) -> String {
         );
     }
 
+    if is_cargo_sonarnwork_invocation(invocation) {
+        let Some(separator) = invocation.args.iter().rposition(|arg| arg == "--") else {
+            return powershell_line(invocation);
+        };
+        let autorun = shell_input_line(&invocation.args[separator + 1..]);
+        let mut launcher = invocation.clone();
+        launcher.args.truncate(separator + 1);
+        let launch_line = powershell_line(&launcher);
+
+        if autorun.is_empty() {
+            return launch_line;
+        }
+
+        return format!(
+            "$env:SONARNWORK_SHELL_AUTORUN = {}; {}; Remove-Item Env:SONARNWORK_SHELL_AUTORUN -ErrorAction SilentlyContinue",
+            quote_powershell(&autorun),
+            launch_line
+        );
+    }
+
     powershell_line(invocation)
+}
+
+fn is_cargo_sonarnwork_invocation(invocation: &CommandInvocation) -> bool {
+    let is_cargo = PathBuf::from(&invocation.program)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .is_some_and(|stem| stem.eq_ignore_ascii_case("cargo"));
+
+    is_cargo
+        && invocation
+            .args
+            .windows(2)
+            .any(|pair| pair == ["--bin", "sonarnwork"])
 }
 
 fn is_sonarnwork_program(program: &str) -> bool {
@@ -982,6 +963,7 @@ fn quote_shell_token(value: &str) -> String {
 
 fn resolve_sonarnwork_cli() -> Option<PathBuf> {
     let mut candidates = Vec::new();
+    let mut roots = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))];
 
     if let Ok(path) = std::env::var("SONARNWORK_CLI") {
         candidates.push(PathBuf::from(path));
@@ -991,17 +973,44 @@ fn resolve_sonarnwork_cli() -> Option<PathBuf> {
         if let Some(exe_dir) = current_exe.parent() {
             candidates.push(exe_dir.join("sonarnwork.exe"));
             candidates.push(exe_dir.join("sonarnwork"));
+            roots.push(exe_dir.to_path_buf());
+        }
+    }
+    if let Ok(current_dir) = std::env::current_dir() {
+        roots.push(current_dir);
+    }
 
-            let mut dir = Some(exe_dir.to_path_buf());
-            while let Some(path) = dir {
-                candidates.push(path.join("target").join("debug").join("sonarnwork.exe"));
-                candidates.push(path.join("target").join("release").join("sonarnwork.exe"));
-                dir = path.parent().map(PathBuf::from);
-            }
+    for root in roots {
+        for path in root.ancestors() {
+            candidates.push(path.join("sonarnwork.exe"));
+            candidates.push(path.join("sonarnwork"));
+            candidates.push(path.join("target").join("debug").join("sonarnwork.exe"));
+            candidates.push(path.join("target").join("release").join("sonarnwork.exe"));
         }
     }
 
     candidates.into_iter().find(|path| path.is_file())
+}
+
+fn resolve_workspace_manifest() -> Option<PathBuf> {
+    let mut roots = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR"))];
+
+    if let Ok(current_dir) = std::env::current_dir() {
+        roots.push(current_dir);
+    }
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(exe_dir) = current_exe.parent() {
+            roots.push(exe_dir.to_path_buf());
+        }
+    }
+
+    roots.into_iter().find_map(|root| {
+        root.ancestors().find_map(|ancestor| {
+            let manifest = ancestor.join("Cargo.toml");
+            let cli_manifest = ancestor.join("crates").join("sonar-cli").join("Cargo.toml");
+            (manifest.is_file() && cli_manifest.is_file()).then_some(manifest)
+        })
+    })
 }
 
 fn open_url(url: &str) -> Result<(), String> {
@@ -1112,15 +1121,98 @@ fn command_error(label: &str, stderr: &[u8]) -> String {
     }
 }
 
+pub fn run() {
+    tauri::Builder::default()
+        .manage(LiveProcesses::default())
+        .manage(HistoryState::default())
+        .manage(OperationsState::default())
+        .setup(|app| {
+            if let Err(error) = resume_monitors(app.handle().clone()) {
+                eprintln!("could not resume background monitors: {error}");
+            }
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            app_info,
+            parse_entity,
+            all_probes,
+            workflows,
+            tools_catalog,
+            interaction_catalog,
+            tool_update_plan,
+            tool_runtime_status,
+            tool_lifecycle_plan,
+            install_tool,
+            update_tool,
+            remote_vantage_plan,
+            run_globalping_measurement,
+            run_remote_port_check,
+            capture_runtime_status,
+            list_capture_interfaces,
+            capture_packets,
+            open_capture_handoff,
+            collect_device_inventory,
+            start_monitor,
+            stop_monitor,
+            list_monitors,
+            list_timeline,
+            clear_timeline,
+            available_probes,
+            available_probes_for_target,
+            run_probe,
+            probe_command,
+            open_probe_terminal,
+            run_probe_live,
+            scanner_command,
+            open_scanner_terminal,
+            run_scanner_live,
+            cancel_probe_live,
+            network_summary,
+            save_probe_run,
+            list_probe_runs,
+            get_probe_run,
+            delete_probe_run,
+            compare_probe_runs
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running SonarNwork app");
+}
+
 #[cfg(test)]
 mod tests {
     use sonar_core::{AppCore, CommandInvocation, ProbeTarget};
 
     use super::{
-        app_core_for_target, installer_url_allowed, invocation_with_override, parse_command_line,
-        probe_cli_invocation, scanner_cli_invocation, scanner_invocation, scanner_kind,
-        terminal_command_line, terminal_invocation,
+        app_core_for_target, cargo_sonarnwork_invocation, installer_url_allowed,
+        interaction_catalog, invocation_with_override, parse_command_line, probe_cli_invocation,
+        scanner_cli_invocation, scanner_invocation, scanner_kind, terminal_command_line,
+        terminal_invocation,
     };
+
+    #[test]
+    fn interaction_catalog_serializes_all_desktop_operation_families() {
+        let catalog = interaction_catalog();
+        catalog.validate().unwrap();
+        for id in [
+            "ping",
+            "scanner.nmap",
+            "scanner.nuclei",
+            "globalping",
+            "capture",
+            "inventory",
+            "monitor",
+            "timeline",
+            "history",
+        ] {
+            assert!(catalog.namespace(id).is_some(), "missing namespace {id}");
+        }
+
+        let value = serde_json::to_value(catalog).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert!(value["namespaces"]
+            .as_array()
+            .is_some_and(|items| !items.is_empty()));
+    }
 
     #[test]
     fn parses_simple_editable_command() {
@@ -1160,16 +1252,117 @@ mod tests {
     }
 
     #[test]
+    fn custom_command_cannot_replace_the_scoped_executable() {
+        let target = ProbeTarget::Input("1.1.1.1".into());
+        let core = AppCore::for_explicit_target(&target).unwrap();
+        let fallback = CommandInvocation {
+            program: "ping".into(),
+            args: vec!["-n".into(), "4".into(), "1.1.1.1".into()],
+        };
+
+        let error = invocation_with_override(
+            &core,
+            &target,
+            fallback,
+            Some("powershell -n 4 1.1.1.1".into()),
+        )
+        .unwrap_err();
+
+        assert!(error.contains("executable must remain"));
+    }
+
+    #[test]
+    fn custom_command_cannot_replace_the_scoped_target() {
+        let target = ProbeTarget::Input("1.1.1.1".into());
+        let core = AppCore::for_explicit_target(&target).unwrap();
+        let fallback = CommandInvocation {
+            program: "ping".into(),
+            args: vec!["-n".into(), "4".into(), "1.1.1.1".into()],
+        };
+
+        let error =
+            invocation_with_override(&core, &target, fallback, Some("ping -n 4 8.8.8.8".into()))
+                .unwrap_err();
+
+        assert!(error.contains("target are fixed"));
+    }
+
+    #[test]
+    fn custom_command_can_tune_a_numeric_option() {
+        let target = ProbeTarget::Input("1.1.1.1".into());
+        let core = AppCore::for_explicit_target(&target).unwrap();
+        let fallback = CommandInvocation {
+            program: "ping".into(),
+            args: vec!["-n".into(), "4".into(), "1.1.1.1".into()],
+        };
+
+        let invocation =
+            invocation_with_override(&core, &target, fallback, Some("ping -n 2 1.1.1.1".into()))
+                .unwrap();
+
+        assert_eq!(invocation.args, ["-n", "2", "1.1.1.1"]);
+    }
+
+    #[test]
     fn terminal_invocation_keeps_non_cli_programs() {
         let invocation = CommandInvocation {
             program: "ping".into(),
             args: vec!["127.0.0.1".into()],
         };
 
-        let resolved = terminal_invocation(invocation);
+        let resolved = terminal_invocation(invocation).unwrap();
 
         assert_eq!(resolved.program, "ping");
         assert_eq!(resolved.args, ["127.0.0.1"]);
+    }
+
+    #[test]
+    fn terminal_invocation_never_leaves_an_unresolved_cli_name() {
+        let invocation = CommandInvocation {
+            program: "sonarnwork".into(),
+            args: vec!["myip".into()],
+        };
+
+        let resolved = terminal_invocation(invocation).unwrap();
+
+        assert_ne!(resolved.program, "sonarnwork");
+        assert!(
+            resolved.program.eq_ignore_ascii_case("cargo")
+                || resolved
+                    .program
+                    .to_ascii_lowercase()
+                    .ends_with("sonarnwork.exe")
+        );
+    }
+
+    #[test]
+    fn terminal_cargo_fallback_runs_the_requested_cli_command() {
+        let resolved = cargo_sonarnwork_invocation(
+            "C:\\src\\SonarNwork\\Cargo.toml".into(),
+            vec!["myip".into()],
+        );
+
+        assert_eq!(resolved.program, "cargo");
+        assert_eq!(
+            resolved.args,
+            [
+                "run",
+                "--quiet",
+                "--manifest-path",
+                "C:\\src\\SonarNwork\\Cargo.toml",
+                "-p",
+                "sonar-cli",
+                "--bin",
+                "sonarnwork",
+                "--",
+                "myip",
+            ]
+        );
+
+        let line = terminal_command_line(&resolved);
+        assert!(line.contains("SONARNWORK_SHELL_AUTORUN"));
+        assert!(line.contains("cargo"));
+        assert_eq!(line.matches("myip").count(), 1);
     }
 
     #[test]
@@ -1278,7 +1471,7 @@ mod tests {
 
     #[test]
     fn non_scanner_tool_cannot_use_scanner_runner() {
-        assert!(scanner_kind("dnsx").is_err());
+        assert!(scanner_kind("globalping").is_err());
     }
 
     #[test]
@@ -1287,35 +1480,4 @@ mod tests {
         assert!(!installer_url_allowed("http://nmap.org/download.html"));
         assert!(!installer_url_allowed("https://example.com/nmap.exe"));
     }
-}
-
-pub fn run() {
-    tauri::Builder::default()
-        .manage(LiveProcesses::default())
-        .invoke_handler(tauri::generate_handler![
-            app_info,
-            parse_entity,
-            all_probes,
-            workflows,
-            tools_catalog,
-            tool_update_plan,
-            tool_runtime_status,
-            tool_lifecycle_plan,
-            install_tool,
-            update_tool,
-            remote_vantage_plan,
-            available_probes,
-            available_probes_for_target,
-            run_probe,
-            probe_command,
-            open_probe_terminal,
-            run_probe_live,
-            scanner_command,
-            open_scanner_terminal,
-            run_scanner_live,
-            cancel_probe_live,
-            network_summary
-        ])
-        .run(tauri::generate_context!())
-        .expect("error while running SonarNwork app");
 }

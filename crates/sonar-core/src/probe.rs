@@ -341,6 +341,9 @@ pub struct OsCommandProbe {
 }
 
 impl OsCommandProbe {
+    // Keep probe registration declarative at the call site: these arguments map
+    // one-to-one to ProbeDescriptor plus the command-specific routing fields.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: &str,
         name: &str,
@@ -364,6 +367,7 @@ impl OsCommandProbe {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn new_with_status(
         id: &str,
         name: &str,

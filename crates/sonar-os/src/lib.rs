@@ -444,7 +444,7 @@ fn parse_addr_port(value: &str) -> Option<(IpAddr, u16)> {
     let addr = match addr {
         "*" | "0.0.0.0" => "0.0.0.0",
         "::" | "[::]" => "::",
-        value if value.is_empty() => "0.0.0.0",
+        "" => "0.0.0.0",
         value => value,
     };
     Some((addr.parse().ok()?, port.parse().ok()?))

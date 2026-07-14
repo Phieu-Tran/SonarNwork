@@ -15,6 +15,12 @@ use crate::{
 pub enum ExternalScannerKind {
     Nmap,
     Nuclei,
+    Httpx,
+    Naabu,
+    Subfinder,
+    Dnsx,
+    Trippy,
+    Nexttrace,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,10 +47,30 @@ pub enum ExternalScannerPorts {
 }
 
 impl ExternalScannerKind {
+    pub fn from_tool_id(tool_id: &str) -> Option<Self> {
+        match tool_id {
+            "nmap" => Some(Self::Nmap),
+            "nuclei" => Some(Self::Nuclei),
+            "httpx" => Some(Self::Httpx),
+            "naabu" => Some(Self::Naabu),
+            "subfinder" => Some(Self::Subfinder),
+            "dnsx" => Some(Self::Dnsx),
+            "trippy" => Some(Self::Trippy),
+            "nexttrace" => Some(Self::Nexttrace),
+            _ => None,
+        }
+    }
+
     pub fn tool_id(self) -> &'static str {
         match self {
             Self::Nmap => "nmap",
             Self::Nuclei => "nuclei",
+            Self::Httpx => "httpx",
+            Self::Naabu => "naabu",
+            Self::Subfinder => "subfinder",
+            Self::Dnsx => "dnsx",
+            Self::Trippy => "trippy",
+            Self::Nexttrace => "nexttrace",
         }
     }
 
@@ -52,6 +78,9 @@ impl ExternalScannerKind {
         match self {
             Self::Nmap => ActionClass::ActiveProbe,
             Self::Nuclei => ActionClass::IntrusiveScan,
+            Self::Httpx | Self::Trippy | Self::Nexttrace => ActionClass::ActiveProbe,
+            Self::Naabu | Self::Dnsx => ActionClass::IntrusiveScan,
+            Self::Subfinder => ActionClass::PassiveLookup,
         }
     }
 }
@@ -116,6 +145,12 @@ impl ExternalScannerProfile {
         match self.kind {
             ExternalScannerKind::Nmap => self.nmap_invocation(program),
             ExternalScannerKind::Nuclei => self.nuclei_invocation(program),
+            ExternalScannerKind::Httpx => self.httpx_invocation(program),
+            ExternalScannerKind::Naabu => self.naabu_invocation(program),
+            ExternalScannerKind::Subfinder => self.subfinder_invocation(program),
+            ExternalScannerKind::Dnsx => self.dnsx_invocation(program),
+            ExternalScannerKind::Trippy => self.trippy_invocation(program),
+            ExternalScannerKind::Nexttrace => self.nexttrace_invocation(program),
         }
     }
 
@@ -185,12 +220,141 @@ impl ExternalScannerProfile {
         }
         CommandInvocation::from_parts(program, args)
     }
+
+    fn httpx_invocation(&self, program: String) -> CommandInvocation {
+        CommandInvocation::from_parts(
+            program,
+            vec![
+                "-u",
+                &self.target,
+                "-silent",
+                "-json",
+                "-status-code",
+                "-title",
+                "-tech-detect",
+                "-follow-redirects",
+                "-timeout",
+                "10",
+                "-retries",
+                "1",
+                "-threads",
+                "10",
+                "-rate-limit",
+                "20",
+            ],
+        )
+    }
+
+    fn naabu_invocation(&self, program: String) -> CommandInvocation {
+        let mut args = vec![
+            "-host".to_string(),
+            self.target.clone(),
+            "-scan-type".into(),
+            "c".into(),
+            "-silent".into(),
+            "-json".into(),
+            "-verify".into(),
+            "-rate".into(),
+            "100".into(),
+            "-c".into(),
+            "10".into(),
+            "-retries".into(),
+            "1".into(),
+        ];
+        match &self.ports {
+            ExternalScannerPorts::Default | ExternalScannerPorts::Top => {
+                args.extend(["-top-ports".into(), "100".into()]);
+            }
+            ExternalScannerPorts::All => args.extend(["-top-ports".into(), "full".into()]),
+            ExternalScannerPorts::Custom(ports) => {
+                args.extend(["-p".into(), ports.clone()]);
+            }
+        }
+        CommandInvocation::from_parts(program, args)
+    }
+
+    fn subfinder_invocation(&self, program: String) -> CommandInvocation {
+        CommandInvocation::from_parts(
+            program,
+            vec![
+                "-d",
+                &self.target,
+                "-silent",
+                "-json",
+                "-timeout",
+                "10",
+                "-max-time",
+                "1",
+            ],
+        )
+    }
+
+    fn dnsx_invocation(&self, program: String) -> CommandInvocation {
+        // dnsx accepts a domain and comma-separated wordlist without a shell/stdin pipeline.
+        // Keep this UI profile deliberately small: three common names, ten queries/second.
+        CommandInvocation::from_parts(
+            program,
+            vec![
+                "-d",
+                &self.target,
+                "-w",
+                "www,mail,api",
+                "-silent",
+                "-json",
+                "-resp",
+                "-retry",
+                "1",
+                "-threads",
+                "5",
+                "-rate-limit",
+                "10",
+            ],
+        )
+    }
+
+    fn trippy_invocation(&self, program: String) -> CommandInvocation {
+        CommandInvocation::from_parts(
+            program,
+            vec![
+                "--mode",
+                "json",
+                "--report-cycles",
+                "1",
+                "--unprivileged",
+                &self.target,
+            ],
+        )
+    }
+
+    fn nexttrace_invocation(&self, program: String) -> CommandInvocation {
+        CommandInvocation::from_parts(
+            program,
+            vec![
+                "--json",
+                "--no-color",
+                "--queries",
+                "3",
+                "--max-attempts",
+                "5",
+                "--parallel-requests",
+                "6",
+                "--timeout",
+                "1000",
+                &self.target,
+            ],
+        )
+    }
 }
 
 fn scanner_target(kind: ExternalScannerKind, entity: &Entity) -> String {
     match kind {
-        ExternalScannerKind::Nmap => scanner_host_target(entity),
-        ExternalScannerKind::Nuclei => scanner_url_target(entity),
+        ExternalScannerKind::Nuclei | ExternalScannerKind::Httpx => scanner_url_target(entity),
+        ExternalScannerKind::Nmap
+        | ExternalScannerKind::Naabu
+        | ExternalScannerKind::Subfinder
+        | ExternalScannerKind::Dnsx
+        | ExternalScannerKind::Trippy
+        | ExternalScannerKind::Nexttrace => scanner_host_target(entity),
     }
 }
 
@@ -286,7 +450,46 @@ pub fn summarize_scanner_output(
     match kind {
         ExternalScannerKind::Nmap => summarize_nmap(exit_code, stdout, stderr),
         ExternalScannerKind::Nuclei => summarize_nuclei(exit_code, stdout, stderr),
+        ExternalScannerKind::Httpx
+        | ExternalScannerKind::Naabu
+        | ExternalScannerKind::Subfinder
+        | ExternalScannerKind::Dnsx
+        | ExternalScannerKind::Trippy
+        | ExternalScannerKind::Nexttrace => summarize_json_lines(kind, exit_code, stdout, stderr),
     }
+}
+
+fn summarize_json_lines(
+    kind: ExternalScannerKind,
+    exit_code: Option<i32>,
+    stdout: &[String],
+    stderr: &[String],
+) -> ProbeOutput {
+    let records = stdout.iter().filter(|line| !line.trim().is_empty()).count();
+    let tool = kind.tool_id();
+    let mut output =
+        ProbeOutput::with_summary(format!("{tool} completed with {records} result line(s)"));
+    output.summary_rows = vec![
+        SummaryRow::new("Tool", tool),
+        SummaryRow::new(
+            "Exit",
+            exit_code.map_or_else(|| "unknown".into(), |v| v.to_string()),
+        ),
+        SummaryRow::new("Result lines", records.to_string()),
+    ];
+    if !stderr.is_empty() {
+        output.warnings.push(crate::probe::ProbeWarning {
+            code: format!("{tool}_stderr"),
+            message: stderr.join("\n"),
+        });
+    }
+    output.raw = Some(json!({
+        "tool": tool,
+        "exit_code": exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+    }));
+    output
 }
 
 fn summarize_nmap(exit_code: Option<i32>, stdout: &[String], stderr: &[String]) -> ProbeOutput {
@@ -484,6 +687,46 @@ mod tests {
             .windows(2)
             .any(|args| args == ["-concurrency", "10"]));
         assert!(!invocation.args.iter().any(|arg| arg.contains(';')));
+    }
+
+    #[test]
+    fn catalog_scanners_have_single_target_bounded_invocations() {
+        let cases = [
+            (
+                ExternalScannerKind::Httpx,
+                "https://example.com",
+                "-rate-limit",
+            ),
+            (ExternalScannerKind::Naabu, "example.com", "-rate"),
+            (ExternalScannerKind::Subfinder, "example.com", "-max-time"),
+            (ExternalScannerKind::Dnsx, "example.com", "-rate-limit"),
+            (
+                ExternalScannerKind::Trippy,
+                "example.com",
+                "--report-cycles",
+            ),
+            (
+                ExternalScannerKind::Nexttrace,
+                "example.com",
+                "--max-attempts",
+            ),
+        ];
+        for (kind, target, bounded_flag) in cases {
+            let invocation = ExternalScannerProfile::new(kind, target)
+                .unwrap()
+                .invocation(Path::new(kind.tool_id()));
+            assert!(
+                invocation.args.iter().any(|arg| arg == bounded_flag),
+                "{}",
+                kind.tool_id()
+            );
+            assert!(
+                invocation.args.iter().any(|arg| arg == target),
+                "{}",
+                kind.tool_id()
+            );
+            assert!(!invocation.args.iter().any(|arg| arg.contains(';')));
+        }
     }
 
     #[test]

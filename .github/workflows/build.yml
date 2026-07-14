@@ -24,13 +24,48 @@ jobs:
   windows:
     name: Windows desktop and CLI
     runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Validate release version
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tagVersion = $env:GITHUB_REF_NAME -replace '^v', ''
+          $cargoMatch = [regex]::Match(
+            (Get-Content "Cargo.toml" -Raw),
+            '(?m)^version = "([^"]+)"\r?$'
+          )
+          $cargoVersion = $cargoMatch.Groups[1].Value
+          $tauriVersion = (Get-Content "app/src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json).version
+          $packageVersion = (Get-Content "app/package.json" -Raw | ConvertFrom-Json).version
+
+          if (-not $cargoVersion) {
+            throw "Could not read the workspace version from Cargo.toml"
+          }
+
+          foreach ($entry in @{
+            "tag" = $tagVersion
+            "Cargo.toml" = $cargoVersion
+            "tauri.conf.json" = $tauriVersion
+            "package.json" = $packageVersion
+          }.GetEnumerator()) {
+            if ($entry.Value -ne $tagVersion) {
+              throw "$($entry.Key) version '$($entry.Value)' does not match tag version '$tagVersion'"
+            }
+          }
+
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
@@ -55,6 +90,15 @@ jobs:
         working-directory: app
         run: pnpm install --frozen-lockfile
 
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets
+
+      - name: Audit Rust dependencies
+        uses: rustsec/audit-check@v2
+
       - name: Test Rust workspace
         run: cargo test --workspace
 
@@ -69,32 +113,214 @@ jobs:
       - name: Build CLI
         run: cargo build -p sonar-cli --release
 
+      - name: Import Windows signing certificate
+        id: windows-signing
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          foreach ($name in "WINDOWS_CERTIFICATE", "WINDOWS_CERTIFICATE_PASSWORD", "WINDOWS_TIMESTAMP_URL") {
+            if ([string]::IsNullOrWhiteSpace((Get-Item "env:$name").Value)) {
+              throw "Required release signing secret $name is not configured"
+            }
+          }
+
+          $certificatePath = Join-Path $env:RUNNER_TEMP "sonarnwork-signing.pfx"
+          try {
+            [IO.File]::WriteAllBytes(
+              $certificatePath,
+              [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE)
+            )
+            $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $certificate = Import-PfxCertificate `
+              -FilePath $certificatePath `
+              -CertStoreLocation Cert:\CurrentUser\My `
+              -Password $password |
+              Select-Object -First 1
+            if (-not $certificate.Thumbprint) {
+              throw "The Windows signing certificate did not expose a thumbprint"
+            }
+            "thumbprint=$($certificate.Thumbprint)" | Out-File $env:GITHUB_OUTPUT -Append -Encoding utf8
+          } finally {
+            Remove-Item $certificatePath -Force -ErrorAction SilentlyContinue
+          }
+
       - name: Build desktop app
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
         working-directory: app
         run: pnpm tauri build
 
-      - name: Package portable test build
+      - name: Build signed desktop app
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: app
+        shell: pwsh
+        env:
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $signingConfig = @{
+            bundle = @{
+              windows = @{
+                certificateThumbprint = "${{ steps.windows-signing.outputs.thumbprint }}"
+                digestAlgorithm = "sha256"
+                timestampUrl = $env:WINDOWS_TIMESTAMP_URL
+              }
+            }
+          } | ConvertTo-Json -Depth 4
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri-signing.json"
+          $signingConfig | Set-Content $configPath -Encoding utf8
+          pnpm tauri build --config $configPath
+
+      - name: Sign standalone CLI
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+            -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match '\\x64\\' } |
+            Sort-Object FullName |
+            Select-Object -Last 1 -ExpandProperty FullName
+          if (-not $signTool) {
+            throw "signtool.exe was not found"
+          }
+          & $signTool sign `
+            /sha1 "${{ steps.windows-signing.outputs.thumbprint }}" `
+            /fd SHA256 `
+            /tr $env:WINDOWS_TIMESTAMP_URL `
+            /td SHA256 `
+            "target/release/sonarnwork.exe" `
+            "target/release/sonar.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Signing the standalone CLI executables failed"
+          }
+
+      - name: Verify release signatures
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $artifacts = @(
+            Get-Item "target/release/sonar.exe", "target/release/sonarnwork.exe", "target/release/sonarnwork-app.exe"
+            Get-ChildItem "target/release/bundle" -Recurse -File |
+              Where-Object { $_.Extension -in ".msi", ".exe" }
+          )
+          foreach ($artifact in $artifacts) {
+            $signature = Get-AuthenticodeSignature $artifact.FullName
+            if ($signature.Status -ne "Valid") {
+              throw "Invalid Authenticode signature for $($artifact.FullName): $($signature.Status)"
+            }
+          }
+
+      - name: Generate CycloneDX SBOM
+        run: |
+          cargo install cargo-cyclonedx --locked --version 0.5.9
+          cargo cyclonedx --format json --all
+
+      - name: Package Windows release assets
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           $stage = "target/release/sonarnwork-portable"
-          $zip = "target/release/SonarNwork-${{ github.run_number }}-${{ github.sha }}-windows-x64-portable.zip"
+          $assets = "target/release/release-assets"
+          $shortSha = $env:GITHUB_SHA.Substring(0, 7)
+          $version = if ($env:GITHUB_REF -like "refs/tags/v*") {
+            $env:GITHUB_REF_NAME
+          } else {
+            "ci-$env:GITHUB_RUN_NUMBER-$shortSha"
+          }
+          $zip = "$assets/SonarNwork-$version-windows-x64-portable.zip"
 
           Remove-Item $stage -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $assets -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $stage | Out-Null
+          New-Item -ItemType Directory -Path $assets | Out-Null
 
+          Copy-Item "target/release/sonar.exe" $stage
           Copy-Item "target/release/sonarnwork.exe" $stage
           Copy-Item "target/release/sonarnwork-app.exe" $stage
-
           Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+
+          Copy-Item `
+            "target/release/sonar.exe" `
+            "$assets/SonarNwork-CLI-$version-windows-x64.exe"
+          Copy-Item "target/release/sonar.exe" "$assets/sonar.exe"
+
+          Get-ChildItem "target/release/bundle" -Recurse -File |
+            Where-Object { $_.Extension -in ".msi", ".exe" } |
+            Copy-Item -Destination $assets
+
+          $sbomStage = Join-Path $env:RUNNER_TEMP "sonarnwork-sbom"
+          Remove-Item $sbomStage -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $sbomStage | Out-Null
+          Get-ChildItem . -Recurse -File |
+            Where-Object { $_.Name -eq "bom.json" -or $_.Name -like "*.cdx.json" } |
+            ForEach-Object {
+              $package = Split-Path $_.DirectoryName -Leaf
+              Copy-Item $_.FullName (Join-Path $sbomStage "$package-$($_.Name)")
+            }
+          if (-not (Get-ChildItem $sbomStage -File)) {
+            throw "cargo-cyclonedx did not produce any JSON SBOM files"
+          }
+          Compress-Archive `
+            -Path "$sbomStage/*" `
+            -DestinationPath "$assets/SonarNwork-$version-CycloneDX-SBOM.zip" `
+            -Force
+
+          $checksums = Get-ChildItem $assets -File |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          $checksums | Set-Content "$assets/SHA256SUMS.txt" -Encoding ascii
+
+      - name: Attest release artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest@v4
+        with:
+          subject-path: target/release/release-assets/*
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sonarnwork-windows-x64
           if-no-files-found: error
-          path: |
-            target/release/SonarNwork-*-windows-x64-portable.zip
-            target/release/sonarnwork.exe
-            target/release/sonarnwork-app.exe
-            target/release/bundle/**
+          path: target/release/release-assets/*
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download verified Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: sonarnwork-windows-x64
+          path: release-assets
+
+      - name: Publish release from existing tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          prerelease=()
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then
+            prerelease+=(--prerelease)
+          fi
+
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --verify-tag \
+            --generate-notes \
+            --title "SonarNwork $GITHUB_REF_NAME" \
+            "${prerelease[@]}"

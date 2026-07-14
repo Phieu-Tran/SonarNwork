@@ -1,4 +1,0 @@
-interface:
-  display_name: "Spec"
-  short_description: "Refine an idea into an actionable specification"
-  default_prompt: "Use $spec to refine this idea into a scoped feature specification with acceptance criteria."

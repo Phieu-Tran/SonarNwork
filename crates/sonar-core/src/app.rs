@@ -174,9 +174,10 @@ impl AppCore {
             _ => return Err(SonarError::InvalidTarget(entity.stable_key())),
         };
 
-        let mut core = Self::default();
-        core.scope = ScopeGuard::new(policy);
-        Ok(core)
+        Ok(Self {
+            scope: ScopeGuard::new(policy),
+            ..Self::default()
+        })
     }
 
     pub fn new(scope: ScopeGuard, probes: ProbeRegistry) -> Self {
@@ -796,7 +797,7 @@ fn register_default_probes(registry: &mut ProbeRegistry) {
         "Public remote port",
         "Check whether an outside remote vantage can reach a host:port. Requires remote-scan.",
         ProbeCategory::PublicExposure,
-        ProbeStatus::Planned,
+        ProbeStatus::Ready,
         ProbeRisk::SafeActive,
         vec![
             ProbeRequirement::Network,
@@ -871,7 +872,7 @@ mod tests {
             .into_iter()
             .find(|probe| probe.id == "public.port_check")
             .unwrap();
-        assert_eq!(public_remote.status, ProbeStatus::Planned);
+        assert_eq!(public_remote.status, ProbeStatus::Ready);
     }
 
     #[test]

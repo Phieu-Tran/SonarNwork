@@ -1,4 +1,0 @@
-interface:
-  display_name: "Test"
-  short_description: "Verify implementation and debug failures"
-  default_prompt: "Use $test to run proportional verification, diagnose failures, and produce a concise test report."

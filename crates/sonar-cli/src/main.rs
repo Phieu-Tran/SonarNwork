@@ -8,15 +8,31 @@ use sonar_core::{
     ExternalScannerProfile, PingProfile, PivotGraph, PortCheckProfile, ProbeDescriptor,
     ProbeOutput, ProbeStatus, ProbeTarget, TraceProfile, TraceProtocol,
 };
-use sonar_tools::ToolCatalog;
-use std::io::{self, Write};
+use sonar_tools::{
+    history::HistoryService,
+    operations::{
+        capture_runtime_status, default_app_data_dir, list_capture_interfaces, CaptureRequest,
+        OperationsService, StartMonitorRequest,
+    },
+    remote::{
+        GlobalpingMeasurementKind, GlobalpingMeasurementRequest, RemotePortCheckRequest,
+        RemoteProviderClient,
+    },
+    InstallStrategy, ToolCatalog,
+};
+use std::fmt::Display;
+use std::io::{self, IsTerminal, Write};
+use std::path::PathBuf;
+use std::process::{Command as ProcessCommand, ExitCode};
+
+mod tui;
 
 #[derive(Debug, Parser)]
-#[command(name = "sonarnwork")]
+#[command(name = "sonar")]
 #[command(version)]
 #[command(about = "SonarNwork CLI shell backed by sonar-core")]
 #[command(
-    after_help = "Examples:\n  sonarnwork check example.com\n  sonarnwork ping 1.1.1.1 --count 4 --timeout 1000\n  sonarnwork trace 1.1.1.1 --tcp --port 443\n  sonarnwork dns example.com --record A\n  sonarnwork scanner run nmap 103.29.26.0/24 --profile version --ports all --yes\n  sonarnwork myip"
+    after_help = "Examples:\n  sonar\n  sonar check example.com\n  sonar ping 1.1.1.1 --count 4 --timeout 1000\n  sonar trace 1.1.1.1 --tcp --port 443\n  sonar scanner run nmap 103.29.26.0/24 --profile version --ports all --yes\n  sonar open ui"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -108,6 +124,41 @@ enum Command {
         #[command(subcommand)]
         command: ToolsCommand,
     },
+    /// Run a measurement from an external network vantage point.
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
+    /// Inspect or start a bounded packet capture.
+    Capture {
+        #[command(subcommand)]
+        command: CaptureCommand,
+    },
+    /// Collect the local neighbor/device inventory.
+    Inventory {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manage persisted reachability monitors.
+    Monitor {
+        #[command(subcommand)]
+        command: MonitorCommand,
+    },
+    /// View or clear the shared operations timeline.
+    Timeline {
+        #[command(subcommand)]
+        command: TimelineCommand,
+    },
+    /// Browse, compare, or explicitly delete saved structured runs.
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+    },
+    /// Open another SonarNwork user interface.
+    Open {
+        #[command(subcommand)]
+        command: OpenCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -171,6 +222,12 @@ enum ScannerCommand {
 enum ScannerToolArg {
     Nmap,
     Nuclei,
+    Httpx,
+    Naabu,
+    Subfinder,
+    Dnsx,
+    Trippy,
+    Nexttrace,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -192,6 +249,12 @@ impl From<ScannerToolArg> for ExternalScannerKind {
         match value {
             ScannerToolArg::Nmap => Self::Nmap,
             ScannerToolArg::Nuclei => Self::Nuclei,
+            ScannerToolArg::Httpx => Self::Httpx,
+            ScannerToolArg::Naabu => Self::Naabu,
+            ScannerToolArg::Subfinder => Self::Subfinder,
+            ScannerToolArg::Dnsx => Self::Dnsx,
+            ScannerToolArg::Trippy => Self::Trippy,
+            ScannerToolArg::Nexttrace => Self::Nexttrace,
         }
     }
 }
@@ -217,6 +280,174 @@ enum ToolsCommand {
         #[arg(long)]
         json: bool,
     },
+    Status {
+        tool_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Lifecycle {
+        tool_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Install {
+        tool_id: String,
+        /// Confirm this explicit installation or installer handoff.
+        #[arg(long)]
+        yes: bool,
+    },
+    Update {
+        tool_id: String,
+        /// Confirm this explicit update or installer handoff.
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum RemoteCommand {
+    Globalping {
+        #[arg(value_enum)]
+        measurement: RemoteMeasurementArg,
+        target: String,
+        #[arg(long, default_value = "")]
+        location: String,
+        #[arg(long, default_value_t = 3)]
+        limit: u8,
+        #[arg(long)]
+        token: Option<String>,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Port {
+        target: String,
+        #[arg(long)]
+        port: u16,
+        #[arg(long, default_value_t = 3)]
+        nodes: u8,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum RemoteMeasurementArg {
+    Ping,
+    Traceroute,
+    Mtr,
+    Dns,
+    Http,
+}
+
+impl From<RemoteMeasurementArg> for GlobalpingMeasurementKind {
+    fn from(value: RemoteMeasurementArg) -> Self {
+        match value {
+            RemoteMeasurementArg::Ping => Self::Ping,
+            RemoteMeasurementArg::Traceroute => Self::Traceroute,
+            RemoteMeasurementArg::Mtr => Self::Mtr,
+            RemoteMeasurementArg::Dns => Self::Dns,
+            RemoteMeasurementArg::Http => Self::Http,
+        }
+    }
+}
+
+#[derive(Debug, Subcommand)]
+enum CaptureCommand {
+    Status {
+        #[arg(long)]
+        json: bool,
+    },
+    Interfaces {
+        #[arg(long)]
+        json: bool,
+    },
+    Run {
+        #[arg(long)]
+        interface: String,
+        #[arg(long, default_value_t = 15)]
+        duration: u64,
+        #[arg(long, default_value_t = 5_000)]
+        packets: u64,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Open {
+        path: std::path::PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MonitorCommand {
+    Start {
+        target: String,
+        #[arg(long, default_value_t = 60)]
+        interval: u64,
+        #[arg(long, default_value_t = 250)]
+        latency: u64,
+        #[arg(long, default_value_t = 20)]
+        loss: u8,
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Stop {
+        monitor_id: String,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TimelineCommand {
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Clear {
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum HistoryCommand {
+    List {
+        #[arg(long)]
+        query: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Get {
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Compare {
+        left_id: String,
+        right_id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Delete {
+        id: String,
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum OpenCommand {
+    /// Launch the SonarNwork desktop app.
+    Ui,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -248,6 +479,99 @@ enum OutputMode {
     Json,
 }
 
+const EXIT_UNHEALTHY: u8 = 1;
+const EXIT_USAGE: u8 = 2;
+const EXIT_DEPENDENCY_UNAVAILABLE: u8 = 3;
+const EXIT_SCOPE_DENIED: u8 = 4;
+const EXIT_OPERATION_FAILED: u8 = 5;
+
+#[derive(Debug)]
+struct CliExitError {
+    code: u8,
+    message: String,
+}
+
+impl CliExitError {
+    fn new(code: u8, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl Display for CliExitError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CliExitError {}
+
+#[derive(Clone, Copy)]
+enum Tone {
+    Brand,
+    Heading,
+    Label,
+    Success,
+    Warning,
+    Error,
+    Muted,
+    Command,
+}
+
+impl Tone {
+    fn ansi(self) -> &'static str {
+        match self {
+            Self::Brand => "\x1b[1;36m",
+            Self::Heading => "\x1b[1;97m",
+            Self::Label => "\x1b[36m",
+            Self::Success => "\x1b[1;32m",
+            Self::Warning => "\x1b[1;33m",
+            Self::Error => "\x1b[1;31m",
+            Self::Muted => "\x1b[2;37m",
+            Self::Command => "\x1b[33m",
+        }
+    }
+}
+
+fn colors_enabled() -> bool {
+    if std::env::var_os("NO_COLOR").is_some() {
+        return false;
+    }
+
+    match std::env::var("SONARNWORK_COLOR") {
+        Ok(value) if value.eq_ignore_ascii_case("always") => true,
+        Ok(value) if value.eq_ignore_ascii_case("never") => false,
+        _ => io::stdout().is_terminal(),
+    }
+}
+
+fn paint(value: impl Display, tone: Tone) -> String {
+    if colors_enabled() {
+        format!("{}{value}\x1b[0m", tone.ansi())
+    } else {
+        value.to_string()
+    }
+}
+
+fn output_tone(output: &ProbeOutput) -> Tone {
+    let failed = output
+        .raw
+        .as_ref()
+        .and_then(|raw| raw.get("exit_code"))
+        .and_then(Value::as_i64)
+        .is_some_and(|code| code != 0);
+
+    if failed {
+        Tone::Error
+    } else if output.warnings.is_empty() {
+        Tone::Success
+    } else {
+        Tone::Warning
+    }
+}
+
 impl OutputOptions {
     fn mode(self) -> OutputMode {
         if self.json {
@@ -273,14 +597,171 @@ impl From<ActionArg> for ActionClass {
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> ExitCode {
+    match try_main().await {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("error: {error:#}");
+            ExitCode::from(exit_code_for_error(&error))
+        }
+    }
+}
+
+async fn try_main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let Some(command) = cli.command else {
+        if tui_enabled() {
+            return tui::run();
+        }
         return run_shell().await;
     };
 
     let core = AppCore::active_network_scan();
     run_command(command, &core).await
+}
+
+fn tui_enabled() -> bool {
+    io::stdin().is_terminal()
+        && io::stdout().is_terminal()
+        && std::env::var_os("SONARNWORK_SHELL_AUTORUN").is_none()
+        && std::env::var("SONARNWORK_TUI").map_or(true, |value| value != "0")
+}
+
+fn exit_code_for_error(error: &anyhow::Error) -> u8 {
+    if let Some(explicit) = error.downcast_ref::<CliExitError>() {
+        return explicit.code;
+    }
+
+    let message = format!("{error:#}").to_ascii_lowercase();
+    if [
+        "not installed",
+        "executable path is unavailable",
+        "tool unavailable",
+        "program not found",
+        "no such file or directory",
+        "cannot find the file specified",
+        "os error 2",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+    {
+        EXIT_DEPENDENCY_UNAVAILABLE
+    } else if [
+        "scope denied",
+        "authorized",
+        "authorization",
+        "requires --yes",
+        "confirm that you own",
+        "confirm this explicit",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+    {
+        EXIT_SCOPE_DENIED
+    } else if [
+        "invalid target",
+        "invalid value",
+        "unknown probe",
+        "unsupported",
+        "does not apply",
+    ]
+    .iter()
+    .any(|marker| message.contains(marker))
+    {
+        EXIT_USAGE
+    } else {
+        EXIT_OPERATION_FAILED
+    }
+}
+
+fn cli_operation<T>(result: Result<T, String>) -> anyhow::Result<T> {
+    result.map_err(anyhow::Error::msg)
+}
+
+fn open_desktop_ui() -> anyhow::Result<()> {
+    let executable = resolve_desktop_executable()?;
+    ProcessCommand::new(&executable)
+        .spawn()
+        .with_context(|| format!("open SonarNwork desktop at {}", executable.display()))?;
+    println!(
+        "{} {}",
+        paint("desktop opened:", Tone::Success),
+        executable.display()
+    );
+    Ok(())
+}
+
+fn resolve_desktop_executable() -> anyhow::Result<PathBuf> {
+    desktop_executable_candidates()
+        .into_iter()
+        .find(|candidate| candidate.is_file())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "desktop program not found; keep sonarnwork-app next to sonar or set SONARNWORK_DESKTOP_PATH"
+            )
+        })
+}
+
+fn desktop_executable_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(explicit) = std::env::var_os("SONARNWORK_DESKTOP_PATH") {
+        push_desktop_candidates(&mut candidates, PathBuf::from(explicit));
+    }
+    if let Ok(current) = std::env::current_exe() {
+        if let Some(directory) = current.parent() {
+            push_desktop_candidates(&mut candidates, directory.to_path_buf());
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            push_desktop_candidates(&mut candidates, directory);
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        for key in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = std::env::var_os(key) {
+                let root = PathBuf::from(root);
+                push_desktop_candidates(&mut candidates, root.join("SonarNwork"));
+                push_desktop_candidates(&mut candidates, root.join("Programs").join("SonarNwork"));
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        push_desktop_candidates(&mut candidates, workspace.join("target/debug"));
+        push_desktop_candidates(&mut candidates, workspace.join("target/release"));
+    }
+    candidates
+}
+
+fn push_desktop_candidates(candidates: &mut Vec<PathBuf>, path: PathBuf) {
+    let is_known_executable = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            desktop_executable_names()
+                .iter()
+                .any(|candidate| name.eq_ignore_ascii_case(candidate))
+        });
+    if path.is_file() || (!path.is_dir() && is_known_executable) {
+        candidates.push(path);
+        return;
+    }
+    for executable in desktop_executable_names() {
+        candidates.push(path.join(executable));
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn desktop_executable_names() -> &'static [&'static str] {
+    &["sonarnwork-app.exe", "SonarNwork.exe"]
+}
+
+#[cfg(not(target_os = "windows"))]
+fn desktop_executable_names() -> &'static [&'static str] {
+    &["sonarnwork-app", "SonarNwork"]
 }
 
 async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
@@ -301,6 +782,7 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
             };
             if matches!(output_options.mode(), OutputMode::Summary) {
                 print_beginner_check(&target, &entity, &descriptor, &output_value);
+                ensure_probe_healthy(&output_value)?;
             } else {
                 print_probe_run(&view, output_options)?;
             }
@@ -432,8 +914,12 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
             if json {
                 print_json(&info)?;
             } else {
-                println!("{} {}", info.name, info.version);
-                println!("{}", info.contract);
+                println!(
+                    "{} {}",
+                    paint(info.name, Tone::Brand),
+                    paint(info.version, Tone::Muted)
+                );
+                println!("{}", paint(info.contract, Tone::Muted));
             }
         }
         Command::Entity { command } => match command {
@@ -442,7 +928,12 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                 if json {
                     print_json(&entity)?;
                 } else {
-                    println!("{} -> {}", target, entity.id());
+                    println!(
+                        "{} {} {}",
+                        paint(target, Tone::Command),
+                        paint("->", Tone::Muted),
+                        paint(entity.id(), Tone::Success)
+                    );
                 }
             }
             EntityCommand::Probes { target, json } => {
@@ -526,10 +1017,381 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                     }
                 }
             }
+            ToolsCommand::Status { tool_id, json } => {
+                let status = ToolCatalog::phase_zero_defaults().runtime_status(&tool_id)?;
+                if json {
+                    print_json(&status)?;
+                } else if status.available {
+                    println!(
+                        "{} {}",
+                        paint("installed:", Tone::Success),
+                        status.version.as_deref().unwrap_or("version unavailable")
+                    );
+                    if let Some(executable) = status.executable {
+                        println!(
+                            "{} {}",
+                            paint("path     :", Tone::Label),
+                            executable.display()
+                        );
+                    }
+                } else {
+                    println!("{} {tool_id}", paint("unavailable:", Tone::Warning));
+                    if let Some(error) = status.error {
+                        println!("{error}");
+                    }
+                }
+            }
+            ToolsCommand::Lifecycle { tool_id, json } => {
+                let plan = ToolCatalog::phase_zero_defaults().lifecycle_plan(&tool_id)?;
+                if json {
+                    print_json(&plan)?;
+                } else {
+                    println!("{} {tool_id}", paint("tool     :", Tone::Label));
+                    println!(
+                        "{} {:?}",
+                        paint("strategy :", Tone::Label),
+                        plan.install_strategy
+                    );
+                    println!("{} {}", paint("installed:", Tone::Label), plan.installed);
+                    println!("{} {}", paint("note     :", Tone::Label), plan.note);
+                }
+            }
+            ToolsCommand::Install { tool_id, yes } => {
+                run_tool_lifecycle_action(&tool_id, yes)?;
+            }
+            ToolsCommand::Update { tool_id, yes } => {
+                run_tool_lifecycle_action(&tool_id, yes)?;
+            }
+        },
+        Command::Remote { command } => {
+            let client = RemoteProviderClient::new()?;
+            match command {
+                RemoteCommand::Globalping {
+                    measurement,
+                    target,
+                    location,
+                    limit,
+                    token,
+                    yes,
+                    json,
+                } => {
+                    let result = client.run_globalping(GlobalpingMeasurementRequest {
+                        kind: measurement.into(),
+                        target,
+                        location,
+                        limit,
+                        scope_confirmed: yes,
+                        token: token.or_else(|| std::env::var("GLOBALPING_TOKEN").ok()),
+                    })?;
+                    if json {
+                        print_json(&result)?;
+                    } else {
+                        println!("{} {}", paint("status:", Tone::Label), result.status);
+                        println!("{} {}", paint("target:", Tone::Label), result.target);
+                        println!("{} {}", paint("report:", Tone::Label), result.share_url);
+                        for node in result.nodes {
+                            println!("- {}: {}", node.location, node.summary);
+                        }
+                    }
+                }
+                RemoteCommand::Port {
+                    target,
+                    port,
+                    nodes,
+                    yes,
+                    json,
+                } => {
+                    let result = client.run_remote_port_check(RemotePortCheckRequest {
+                        target,
+                        port,
+                        max_nodes: nodes,
+                        scope_confirmed: yes,
+                    })?;
+                    if json {
+                        print_json(&result)?;
+                    } else {
+                        println!("{} {}", paint("status:", Tone::Label), result.status);
+                        println!(
+                            "{} {}:{}",
+                            paint("target:", Tone::Label),
+                            result.target,
+                            result.port
+                        );
+                        println!("{} {}", paint("report:", Tone::Label), result.report_url);
+                        for node in result.nodes {
+                            println!("- {}: {}", node.location, node.status);
+                        }
+                    }
+                }
+            }
+        }
+        Command::Capture { command } => {
+            let service = OperationsService::new(default_app_data_dir());
+            match command {
+                CaptureCommand::Status { json } => {
+                    let status = capture_runtime_status();
+                    if json {
+                        print_json(&status)?;
+                    } else if status.available {
+                        println!(
+                            "{} {}",
+                            paint("ready:", Tone::Success),
+                            status.version.as_deref().unwrap_or("TShark")
+                        );
+                    } else {
+                        println!("{}", paint("TShark unavailable", Tone::Warning));
+                        if let Some(error) = status.error {
+                            println!("{error}");
+                        }
+                    }
+                }
+                CaptureCommand::Interfaces { json } => {
+                    let interfaces = cli_operation(list_capture_interfaces())?;
+                    if json {
+                        print_json(&interfaces)?;
+                    } else {
+                        for interface in interfaces {
+                            println!("- {}: {}", interface.id, interface.label);
+                        }
+                    }
+                }
+                CaptureCommand::Run {
+                    interface,
+                    duration,
+                    packets,
+                    yes,
+                    json,
+                } => {
+                    let result = cli_operation(service.capture_packets(CaptureRequest {
+                        interface_id: interface,
+                        duration_seconds: duration,
+                        packet_limit: packets,
+                        scope_confirmed: yes,
+                    }))?;
+                    if json {
+                        print_json(&result)?;
+                    } else {
+                        println!(
+                            "{} {}",
+                            paint("capture:", Tone::Success),
+                            result.path.display()
+                        );
+                        println!("{} {}", paint("bytes  :", Tone::Label), result.bytes);
+                    }
+                }
+                CaptureCommand::Open { path } => {
+                    cli_operation(service.open_capture_handoff(path))?;
+                }
+            }
+        }
+        Command::Inventory { json } => {
+            let snapshot = cli_operation(
+                OperationsService::new(default_app_data_dir()).collect_device_inventory(),
+            )?;
+            if json {
+                print_json(&snapshot)?;
+            } else {
+                println!(
+                    "{} {} ({})",
+                    paint("devices:", Tone::Label),
+                    snapshot.devices.len(),
+                    snapshot.source
+                );
+                for device in snapshot.devices {
+                    println!(
+                        "- {}  {}  {}",
+                        device.ip,
+                        device.mac.as_deref().unwrap_or("-"),
+                        device.state
+                    );
+                }
+            }
+        }
+        Command::Monitor { command } => {
+            let service = OperationsService::new(default_app_data_dir());
+            match command {
+                MonitorCommand::Start {
+                    target,
+                    interval,
+                    latency,
+                    loss,
+                    yes,
+                    json,
+                } => {
+                    let config = cli_operation(service.start_monitor(StartMonitorRequest {
+                        target,
+                        interval_seconds: interval,
+                        latency_alert_ms: latency,
+                        loss_alert_percent: loss,
+                        scope_confirmed: yes,
+                    }))?;
+                    if json {
+                        print_json(&config)?;
+                    } else {
+                        println!("{} {}", paint("monitor:", Tone::Success), config.id);
+                        println!("{} {}", paint("target :", Tone::Label), config.target);
+                        println!(
+                            "registered in the shared store; the desktop or an active TUI session resumes sampling"
+                        );
+                    }
+                }
+                MonitorCommand::Stop { monitor_id } => {
+                    cli_operation(service.stop_monitor(&monitor_id))?;
+                }
+                MonitorCommand::List { json } => {
+                    let monitors = cli_operation(service.list_monitors())?;
+                    if json {
+                        print_json(&monitors)?;
+                    } else {
+                        for monitor in monitors {
+                            println!(
+                                "- {} {} every {}s ({})",
+                                monitor.id,
+                                monitor.target,
+                                monitor.interval_seconds,
+                                if monitor.enabled {
+                                    "enabled"
+                                } else {
+                                    "stopped"
+                                }
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Command::Timeline { command } => {
+            let service = OperationsService::new(default_app_data_dir());
+            match command {
+                TimelineCommand::List { json } => {
+                    let events = cli_operation(service.list_timeline())?;
+                    if json {
+                        print_json(&events)?;
+                    } else {
+                        for event in events {
+                            println!("- [{}] {}: {}", event.severity, event.title, event.detail);
+                        }
+                    }
+                }
+                TimelineCommand::Clear { yes } => {
+                    anyhow::ensure!(yes, "clearing the timeline requires --yes");
+                    cli_operation(service.clear_timeline())?;
+                    println!("{}", paint("timeline cleared", Tone::Success));
+                }
+            }
+        }
+        Command::History { command } => {
+            let history = HistoryService::new(default_app_data_dir());
+            match command {
+                HistoryCommand::List { query, json } => {
+                    let runs = cli_operation(history.list(query.as_deref()))?;
+                    if json {
+                        print_json(&runs)?;
+                    } else {
+                        for run in runs {
+                            println!(
+                                "- {} [{}] {} {} — {}",
+                                run.id, run.verdict, run.probe_id, run.target, run.summary
+                            );
+                        }
+                    }
+                }
+                HistoryCommand::Get { id, json } => {
+                    let run = cli_operation(history.get(&id))?;
+                    if json {
+                        print_json(&run)?;
+                    } else {
+                        println!("{} {}", paint("probe  :", Tone::Label), run.probe_name);
+                        println!("{} {}", paint("target :", Tone::Label), run.target);
+                        println!("{} {}", paint("verdict:", Tone::Label), run.verdict);
+                        println!("{} {}", paint("summary:", Tone::Label), run.summary);
+                        for fact in run.summary_rows {
+                            println!("- {}: {}", fact.label, fact.value);
+                        }
+                    }
+                }
+                HistoryCommand::Compare {
+                    left_id,
+                    right_id,
+                    json,
+                } => {
+                    let comparison = cli_operation(history.compare(&left_id, &right_id))?;
+                    if json {
+                        print_json(&comparison)?;
+                    } else {
+                        println!(
+                            "{} {}",
+                            paint("verdict changed:", Tone::Label),
+                            comparison.verdict_changed
+                        );
+                        for change in comparison.fact_changes {
+                            println!(
+                                "- {}: {} -> {}",
+                                change.label,
+                                change.before.as_deref().unwrap_or("-"),
+                                change.after.as_deref().unwrap_or("-")
+                            );
+                        }
+                    }
+                }
+                HistoryCommand::Delete { id, yes } => {
+                    anyhow::ensure!(yes, "deleting a saved run requires --yes");
+                    cli_operation(history.delete(&id))?;
+                    println!("{} {id}", paint("deleted:", Tone::Success));
+                }
+            }
+        }
+        Command::Open { command } => match command {
+            OpenCommand::Ui => open_desktop_ui()?,
         },
     }
 
     Ok(())
+}
+
+fn run_tool_lifecycle_action(tool_id: &str, confirmed: bool) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        confirmed,
+        "confirm this explicit tool installation or update with --yes"
+    );
+    let catalog = ToolCatalog::phase_zero_defaults();
+    let plan = catalog.lifecycle_plan(tool_id)?;
+    match plan.install_strategy {
+        InstallStrategy::SystemInstaller => {
+            let url = plan
+                .action_url
+                .context("official installer URL is unavailable")?;
+            anyhow::ensure!(
+                url == "https://nmap.org/download.html",
+                "installer URL is not on the official allow-list"
+            );
+            #[cfg(target_os = "windows")]
+            {
+                std::process::Command::new("cmd")
+                    .args(["/C", "start", "", &url])
+                    .spawn()
+                    .context("open official installer")?;
+                println!("Opened the official installer. Refresh tool status after it completes.");
+                Ok(())
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = url;
+                anyhow::bail!("installer handoff is currently implemented for Windows")
+            }
+        }
+        InstallStrategy::ManagedDownload | InstallStrategy::AutoDownload => {
+            let status = catalog.install_managed(tool_id)?;
+            anyhow::ensure!(status.available, "{tool_id} installation was not detected");
+            println!(
+                "{} {}",
+                paint("installed:", Tone::Success),
+                status.version.as_deref().unwrap_or("version unavailable")
+            );
+            Ok(())
+        }
+        _ => anyhow::bail!("{tool_id} does not support installation from SonarNwork"),
+    }
 }
 
 async fn run_shell() -> anyhow::Result<()> {
@@ -539,14 +1401,23 @@ async fn run_shell() -> anyhow::Result<()> {
     if let Ok(command) = std::env::var("SONARNWORK_SHELL_AUTORUN") {
         let command = command.trim();
         if !command.is_empty() {
-            println!("sonarnwork > {command}");
+            println!(
+                "{} {} {}",
+                paint("sonar", Tone::Brand),
+                paint(">", Tone::Muted),
+                paint(command, Tone::Command)
+            );
             run_shell_command(command, &core).await;
             println!();
         }
     }
 
     loop {
-        print!("sonarnwork > ");
+        print!(
+            "{} {} ",
+            paint("sonar", Tone::Brand),
+            paint(">", Tone::Muted)
+        );
         io::stdout().flush().context("flush shell prompt")?;
 
         let mut line = String::new();
@@ -588,7 +1459,7 @@ async fn run_shell_command(line: &str, core: &AppCore) {
     match parse_shell_command(line) {
         Ok(Some(command)) => {
             if let Err(err) = run_command(command, core).await {
-                eprintln!("error: {err:#}");
+                eprintln!("{} {err:#}", paint("error:", Tone::Error));
             }
         }
         Ok(None) => {}
@@ -613,11 +1484,10 @@ fn parse_shell_command(line: &str) -> Result<Option<Command>, clap::Error> {
         return Ok(None);
     }
 
-    if !args
-        .first()
-        .is_some_and(|arg| arg.eq_ignore_ascii_case("sonarnwork"))
-    {
-        args.insert(0, "sonarnwork".into());
+    if !args.first().is_some_and(|arg| {
+        arg.eq_ignore_ascii_case("sonar") || arg.eq_ignore_ascii_case("sonarnwork")
+    }) {
+        args.insert(0, "sonar".into());
     }
 
     Cli::try_parse_from(args).map(|cli| cli.command)
@@ -668,31 +1538,55 @@ fn print_shell_banner(core: &AppCore) {
     let info = core.app_info();
 
     println!(
-        r#"
+        "{}",
+        paint(
+            r#"
   ____   ___  _   _    _    ____  _   ___        _____  ____  _  __
  / ___| / _ \| \ | |  / \  |  _ \| \ | \ \      / / _ \|  _ \| |/ /
  \___ \| | | |  \| | / _ \ | |_) |  \| |\ \ /\ / / | | | |_) | ' /
   ___) | |_| | |\  |/ ___ \|  _ <| |\  | \ V  V /| |_| |  _ <| . \
  |____/ \___/|_| \_/_/   \_\_| \_\_| \_|  \_/\_/  \___/|_| \_\_|\_\
-"#
+"#,
+            Tone::Brand
+        )
     );
-    println!("SonarNwork CLI Shell  {}", info.version);
-    println!("{}", info.contract);
+    println!(
+        "{}  {}",
+        paint("SonarNwork CLI Shell", Tone::Heading),
+        paint(info.version, Tone::Muted)
+    );
+    println!("{}", paint(info.contract, Tone::Muted));
     println!();
-    println!("Mode   : interactive operator console");
-    println!("Scope  : local checks, DNS, trace, ports, probes, and scanners");
-    println!("Input  : type commands below without the program name");
-    println!("Try    : help | probe list | myip | scanner run nmap 103.29.26.0/24 --profile version --ports all --yes | exit");
+    println!(
+        "{} interactive operator console",
+        paint("Mode   :", Tone::Label)
+    );
+    println!(
+        "{} local checks, DNS, trace, ports, probes, and scanners",
+        paint("Scope  :", Tone::Label)
+    );
+    println!(
+        "{} type commands below without the program name",
+        paint("Input  :", Tone::Label)
+    );
+    println!(
+        "{} {}",
+        paint("Try    :", Tone::Label),
+        paint("help | probe list | myip | exit", Tone::Command)
+    );
     println!();
 }
 
 fn print_shell_help() {
-    println!("Interactive commands:");
+    println!("{}", paint("Interactive commands", Tone::Heading));
     println!("  help                         show this shell help");
     println!("  clear                        redraw the banner");
     println!("  exit                         close the shell");
     println!();
-    println!("Run SonarNwork commands directly:");
+    println!(
+        "{}",
+        paint("Run SonarNwork commands directly", Tone::Heading)
+    );
     println!("  check example.com");
     println!("  ping 1.1.1.1 --count 4 --timeout 1000");
     println!("  trace 1.1.1.1 --tcp --port 443");
@@ -702,7 +1596,7 @@ fn print_shell_help() {
     println!("  scanner run nmap 103.29.26.0/24 --profile version --ports all --yes");
     println!("  myip");
     println!();
-    println!("Command help still works:");
+    println!("{}", paint("Command help still works", Tone::Heading));
     println!("  probe --help");
     println!("  scanner run --help");
 }
@@ -783,7 +1677,11 @@ fn run_scanner_command(
     print_scanner_run(&view, output_options)?;
 
     if !output.status.success() {
-        anyhow::bail!("scanner exited with {}", output.status);
+        return Err(CliExitError::new(
+            EXIT_UNHEALTHY,
+            format!("scanner exited with {}", output.status),
+        )
+        .into());
     }
 
     Ok(())
@@ -796,6 +1694,12 @@ fn scanner_profile_for_tool(
     let profile = profile.unwrap_or(match kind {
         ExternalScannerKind::Nmap => ScannerProfileArg::Version,
         ExternalScannerKind::Nuclei => ScannerProfileArg::Safe,
+        ExternalScannerKind::Httpx
+        | ExternalScannerKind::Naabu
+        | ExternalScannerKind::Subfinder
+        | ExternalScannerKind::Dnsx
+        | ExternalScannerKind::Trippy
+        | ExternalScannerKind::Nexttrace => ScannerProfileArg::Default,
     });
     let mode = profile.into();
     ensure_scanner_mode_matches_kind(kind, mode)?;
@@ -807,9 +1711,16 @@ fn scanner_ports_for_tool(
     ports: Option<String>,
 ) -> anyhow::Result<ExternalScannerPorts> {
     match kind {
-        ExternalScannerKind::Nmap => Ok(parse_scanner_ports(ports.as_deref().unwrap_or("top"))?),
-        ExternalScannerKind::Nuclei => {
-            anyhow::ensure!(ports.is_none(), "--ports only applies to nmap");
+        ExternalScannerKind::Nmap | ExternalScannerKind::Naabu => {
+            Ok(parse_scanner_ports(ports.as_deref().unwrap_or("top"))?)
+        }
+        ExternalScannerKind::Nuclei
+        | ExternalScannerKind::Httpx
+        | ExternalScannerKind::Subfinder
+        | ExternalScannerKind::Dnsx
+        | ExternalScannerKind::Trippy
+        | ExternalScannerKind::Nexttrace => {
+            anyhow::ensure!(ports.is_none(), "--ports only applies to nmap and naabu");
             Ok(ExternalScannerPorts::Default)
         }
     }
@@ -894,23 +1805,32 @@ fn print_beginner_check(
     descriptor: &ProbeDescriptor,
     output: &ProbeOutput,
 ) {
-    println!("SonarNwork quick check");
-    println!("Target : {target}");
-    println!("Entity : {}", entity.id());
-    println!("Tool   : {} ({})", descriptor.name, descriptor.id);
+    println!("{}", paint("SonarNwork quick check", Tone::Heading));
+    println!("{} {target}", paint("Target :", Tone::Label));
+    println!("{} {}", paint("Entity :", Tone::Label), entity.id());
+    println!(
+        "{} {} ({})",
+        paint("Tool   :", Tone::Label),
+        descriptor.name,
+        descriptor.id
+    );
     println!();
     println!(
-        "Result : {}",
-        output
-            .summary
-            .as_deref()
-            .unwrap_or("Check completed. See details below.")
+        "{} {}",
+        paint("Result :", Tone::Label),
+        paint(
+            output
+                .summary
+                .as_deref()
+                .unwrap_or("Check completed. See details below."),
+            output_tone(output)
+        )
     );
     print_summary_rows(output);
     println!();
-    println!("Next commands:");
+    println!("{}", paint("Next commands", Tone::Heading));
     for command in next_commands_for(target, entity) {
-        println!("  {command}");
+        println!("  {}", paint(command, Tone::Command));
     }
 }
 
@@ -919,7 +1839,7 @@ fn print_summary_rows(output: &ProbeOutput) {
         return;
     }
 
-    println!("Details:");
+    println!("{}", paint("Details", Tone::Heading));
     let label_width = output
         .summary_rows
         .iter()
@@ -928,22 +1848,53 @@ fn print_summary_rows(output: &ProbeOutput) {
         .unwrap_or(0)
         .min(18);
     for row in &output.summary_rows {
-        println!("  {:label_width$} : {}", row.label, row.value);
+        let label = format!("{:label_width$}", row.label);
+        println!(
+            "  {} {} {}",
+            paint(label, Tone::Label),
+            paint(":", Tone::Muted),
+            row.value
+        );
     }
 }
 
 fn print_probe_run(view: &ProbeRunView, options: OutputOptions) -> anyhow::Result<()> {
     match options.mode() {
-        OutputMode::Json => print_json(view),
-        OutputMode::Raw => print_raw_output(&view.output),
+        OutputMode::Json => print_json(view)?,
+        OutputMode::Raw => print_raw_output(&view.output)?,
         OutputMode::Summary => {
             println!(
                 "{}",
-                view.output.summary.as_deref().unwrap_or("Probe completed.")
+                paint(
+                    view.output.summary.as_deref().unwrap_or("Probe completed."),
+                    output_tone(&view.output)
+                )
             );
             print_summary_rows(&view.output);
-            Ok(())
         }
+    }
+
+    ensure_probe_healthy(&view.output)
+}
+
+fn ensure_probe_healthy(output: &ProbeOutput) -> anyhow::Result<()> {
+    let Some(exit_code) = output
+        .raw
+        .as_ref()
+        .and_then(|raw| raw.get("exit_code"))
+        .and_then(Value::as_i64)
+    else {
+        return Ok(());
+    };
+
+    if exit_code == 0 {
+        Ok(())
+    } else {
+        Err(CliExitError::new(
+            EXIT_UNHEALTHY,
+            format!("probe completed unhealthy (raw command exit {exit_code})"),
+        )
+        .into())
     }
 }
 
@@ -1006,28 +1957,36 @@ fn next_commands_for(target: &str, entity: &Entity) -> Vec<String> {
 }
 
 fn print_probe_list(probes: &[ProbeDescriptor]) {
-    println!("Available probes:");
+    println!("{}", paint("Available probes", Tone::Heading));
     for probe in probes {
+        let status_tone = match probe.status {
+            ProbeStatus::Ready => Tone::Success,
+            ProbeStatus::Planned => Tone::Warning,
+            ProbeStatus::Disabled => Tone::Muted,
+        };
+        let probe_id = format!("{:28}", probe.id);
+        let category = format!("{:16}", format!("{:?}", probe.category));
         println!(
-            "- {:28} {:16} {:?} {:?}",
-            probe.id,
-            format!("{:?}", probe.category),
+            "{} {} {} {:?} {}",
+            paint("•", Tone::Brand),
+            paint(probe_id, Tone::Command),
+            paint(category, Tone::Muted),
             probe.risk,
-            probe.status
+            paint(format!("{:?}", probe.status), status_tone)
         );
-        println!("  {}", probe.description);
+        println!("  {}", paint(&probe.description, Tone::Muted));
     }
 }
 
 fn print_guide() {
-    println!("SonarNwork beginner guide");
+    println!("{}", paint("SonarNwork beginner guide", Tone::Heading));
     println!();
-    println!("Start here:");
+    println!("{}", paint("Start here", Tone::Brand));
     println!("  sonarnwork check example.com");
     println!("  sonarnwork check https://example.com");
     println!("  sonarnwork check 1.1.1.1:443");
     println!();
-    println!("Useful next steps:");
+    println!("{}", paint("Useful next steps", Tone::Brand));
     println!("  sonarnwork probe list");
     println!("  sonarnwork ping 1.1.1.1 --count 4 --timeout 1000");
     println!("  sonarnwork trace 1.1.1.1 --tcp --port 443");
@@ -1036,7 +1995,7 @@ fn print_guide() {
     println!("  sonarnwork scanner run nmap 103.29.26.0/24 --profile version --ports all --yes");
     println!("  sonarnwork myip");
     println!();
-    println!("Output modes:");
+    println!("{}", paint("Output modes", Tone::Brand));
     println!("  --summary  filtered result for humans (default)");
     println!("  --raw      raw command output");
     println!("  --json     full structured output");

@@ -2,6 +2,7 @@ pub mod app;
 pub mod entity;
 pub mod error;
 pub mod graph;
+pub mod interaction;
 pub mod probe;
 pub mod scanner;
 pub mod scope;
@@ -17,6 +18,11 @@ pub use entity::{
 };
 pub use error::{Result, SonarError};
 pub use graph::{Confidence, EntityEdge, EntityNode, PivotGraph, Provenance, RelationKind};
+pub use interaction::{
+    core_interaction_catalog, scanner_interaction_namespace, InteractionCapability,
+    InteractionCatalog, InteractionChoice, InteractionField, InteractionFieldKind,
+    InteractionGroup, InteractionNamespace, InteractionVisibility, INTERACTION_SCHEMA_VERSION,
+};
 pub use probe::{
     command_target, Artifact, ArtifactKind, CommandInvocation, DiscoveredEntity, DnsLookupProfile,
     EdgeDraft, Finding, HttpProbeProfile, PingProfile, PortCheckProfile, Probe, ProbeCategory,

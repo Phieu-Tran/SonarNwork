@@ -319,8 +319,166 @@ summary:focus-visible {
   padding: 0 8px;
 }
 
+.appBody {
+  display: grid;
+  grid-template-columns: 196px minmax(0, 1fr);
+  align-items: stretch;
+  min-height: calc(100vh - 44px);
+}
+
+.packageSidebar {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  border-right: 1px solid var(--line);
+  padding: 14px 10px;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--workflow-soft) 28%, transparent), transparent 190px),
+    var(--surface-2);
+}
+
+.packageSidebarHeader {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+  padding: 0 4px 11px;
+}
+
+.packageSidebarIcon,
+.packageGlyph {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid color-mix(in srgb, var(--workflow-accent) 34%, var(--line));
+  color: var(--workflow-accent);
+  background: color-mix(in srgb, var(--workflow-soft) 64%, var(--surface-3));
+}
+
+.packageSidebarIcon {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.packageSidebarTitle,
+.packageNavText {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.packageSidebarTitle strong {
+  font-size: 12px;
+}
+
+.packageSidebarTitle small,
+.packageNavText small,
+.packageSidebarHint {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.3;
+}
+
+.packageCount {
+  min-width: 20px;
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: var(--muted);
+  background: var(--surface-3);
+  font-size: 10px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.packageNav {
+  display: grid;
+  gap: 5px;
+}
+
+.packageNav button {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+}
+
+.packageNav button:hover {
+  border-color: var(--line);
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.packageNav button.active {
+  border-color: color-mix(in srgb, var(--workflow-accent) 38%, var(--line));
+  color: var(--text);
+  background: color-mix(in srgb, var(--workflow-soft) 54%, var(--surface-3));
+  box-shadow: inset 3px 0 0 var(--workflow-accent);
+}
+
+.packageGlyph {
+  width: 42px;
+  height: 30px;
+  border-radius: 7px;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+}
+
+.packageLogo {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
+.packageLogo--icon {
+  width: 25px;
+  height: 25px;
+}
+
+.packageLogo--wordmark {
+  width: 36px;
+  height: 22px;
+}
+
+.shell[data-theme="dark"] .packageLogo--wordmark {
+  filter: invert(1);
+}
+
+.packageNavText strong {
+  overflow: hidden;
+  color: inherit;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.packageNavText small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.packageSidebarHint {
+  margin: auto 5px 2px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
 .workspace {
   width: min(100%, 980px);
+  min-width: 0;
   margin: 0 auto;
   padding: 26px clamp(16px, 4vw, 28px) 34px;
 }
@@ -741,6 +899,153 @@ summary:focus-visible {
   color: #ffb4b4;
 }
 
+.remoteExecutionPanel {
+  display: grid;
+  gap: 12px;
+}
+
+.remoteExecutionForm {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(220px, 1.6fr) minmax(140px, 1fr) 90px;
+  gap: 9px;
+}
+
+.remoteExecutionForm label,
+.remotePortTarget label {
+  display: grid;
+  gap: 5px;
+}
+
+.remoteExecutionForm label > span,
+.remotePortTarget label > span {
+  color: var(--faint);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.remoteExecutionForm input,
+.remoteExecutionForm select,
+.remotePortTarget select {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 9px;
+  color: var(--text);
+  background: var(--surface-2);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.remoteTokenField {
+  grid-column: 2 / span 2;
+}
+
+.remoteScopeConfirmation {
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
+  border-radius: 8px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface-3));
+}
+
+.remoteExecutionActions,
+.remotePortTarget {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.remoteExecutionActions small {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.remotePortTarget code {
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.remoteResultView {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+.remoteResultView > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.remoteResultView > header div {
+  display: grid;
+  gap: 2px;
+}
+
+.remoteResultView > header span,
+.remoteResultView > small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.remoteResultView > header code {
+  color: var(--faint);
+  font-size: 10px;
+}
+
+.remoteNodeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.remoteNodeResult {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--faint);
+  border-radius: 8px;
+  padding: 10px;
+  color: var(--text);
+  background: var(--surface-3);
+}
+
+.remoteNodeResult.finished,
+.remoteNodeResult.open {
+  border-left-color: var(--ok);
+}
+
+.remoteNodeResult.failed,
+.remoteNodeResult.closed_or_filtered {
+  border-left-color: var(--danger);
+}
+
+.remoteNodeResult small,
+.remoteNodeResult em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.remoteNodeResult span {
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.remoteNodeResult pre {
+  max-height: 130px;
+  margin: 4px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 9.5px;
+}
+
 .plannedPanel ul {
   display: grid;
   gap: 0;
@@ -989,7 +1294,20 @@ summary:focus-visible {
 .scannerRunner {
   display: grid;
   gap: 10px;
-  margin-top: 12px;
+}
+
+.scannerSetupNotice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--line));
+  border-radius: 8px;
+  padding: 9px 10px;
+  color: var(--text);
+  background: color-mix(in srgb, var(--warning) 8%, var(--surface-3));
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .scannerPackageStatus {
@@ -1045,6 +1363,25 @@ summary:focus-visible {
   font-style: normal;
   font-weight: 900;
   white-space: nowrap;
+}
+
+.scannerPackageControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.scannerPackageControls .secondaryButton.compact {
+  min-height: 28px;
+  padding: 5px 8px;
+}
+
+.scannerPackageControls .secondaryButton.compact span {
+  color: inherit;
+  font-size: inherit;
+  text-transform: none;
 }
 
 .scannerTargetRow {
@@ -1588,6 +1925,14 @@ summary:focus-visible {
     width: 100%;
   }
 
+  .appBody {
+    grid-template-columns: 166px minmax(0, 1fr);
+  }
+
+  .packageSidebar {
+    padding-inline: 8px;
+  }
+
   .workspace {
     padding-top: 22px;
   }
@@ -1606,8 +1951,48 @@ summary:focus-visible {
     min-height: 100vh;
   }
 
+  .appBody {
+    grid-template-columns: 56px minmax(0, 1fr);
+  }
+
+  .packageSidebar {
+    gap: 8px;
+    padding: 10px 6px;
+  }
+
+  .packageSidebarHeader {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding-inline: 0;
+  }
+
+  .packageSidebarTitle,
+  .packageCount,
+  .packageNavText,
+  .packageSidebarHint {
+    display: none;
+  }
+
+  .packageNav button {
+    grid-template-columns: 1fr;
+    justify-items: center;
+    padding: 6px;
+  }
+
+  .packageGlyph {
+    width: 30px;
+  }
+
+  .packageLogo--wordmark {
+    width: 26px;
+  }
+
+  .packageNav button.active {
+    box-shadow: inset 2px 0 0 var(--workflow-accent);
+  }
+
   .workspace {
-    padding: 18px 12px 26px;
+    padding: 18px 10px 26px;
   }
 
   .questionHeader h1 {
@@ -1648,4 +2033,337 @@ summary:focus-visible {
   .resultPanel header div {
     flex-wrap: wrap;
   }
+}
+
+.historyPanel {
+  display: grid;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  margin-top: 18px;
+  padding: 16px;
+  background: var(--surface-1);
+}
+
+.historyPanelHeader h2,
+.historySectionTitle,
+.historySearch,
+.historyItem,
+.comparisonRow {
+  display: flex;
+  align-items: center;
+}
+
+.historyPanelHeader h2 {
+  gap: 8px;
+  margin: 3px 0 0;
+  font-size: 18px;
+}
+
+.historyPanelHeader .eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.historySection {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 12px;
+  background: var(--surface-2);
+}
+
+.historySection h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.historySectionTitle {
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.historySearch {
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.historySearch input {
+  min-width: 0;
+  flex: 1;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--surface-1);
+}
+
+.historySearch {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding-left: 9px;
+  color: var(--muted);
+  background: var(--surface-1);
+}
+
+.historySearch input {
+  border: 0;
+  padding-left: 0;
+  outline: 0;
+}
+
+.historyList {
+  display: grid;
+  gap: 7px;
+  max-height: 330px;
+  overflow: auto;
+}
+
+.historyItem {
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px;
+  background: var(--surface-1);
+}
+
+.historyItemMain {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 3px;
+  border: 0;
+  padding: 2px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+}
+
+.historyItemMain span,
+.historyItemMain small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.historyVerdict {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: var(--surface-3);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.historyVerdict.ok {
+  color: var(--ok);
+}
+
+.historyVerdict.warning {
+  color: var(--warning);
+}
+
+.historyVerdict.failed {
+  color: var(--danger);
+}
+
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.iconButton:hover {
+  border-color: var(--line);
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.historyEmpty {
+  margin: 8px 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.comparisonPanel {
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  padding: 12px;
+  background: var(--surface-2);
+}
+
+.comparisonPanel h3,
+.comparisonPanel p {
+  margin: 0 0 9px;
+}
+
+.comparisonRow {
+  display: grid;
+  grid-template-columns: minmax(100px, 0.8fr) minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 9px;
+  border-top: 1px solid var(--line);
+  padding: 8px 0;
+  font-size: 12px;
+}
+
+@media (max-width: 520px) {
+  .comparisonRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+.operationsPage {
+  display: grid;
+  gap: 14px;
+}
+
+.operationsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.operationsCard {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface-1);
+}
+
+.operationsCard > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.operationsCard header div,
+.operationsCard label,
+.captureResult,
+.monitorList > div,
+.timelineList > div {
+  display: grid;
+  gap: 5px;
+}
+
+.operationsCard header span,
+.operationsCard label > span,
+.captureResult span,
+.monitorList span,
+.timelineList span,
+.timelineList small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.operationsRuntime {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  font-size: 12px;
+}
+
+.operationsRuntime.ready { color: var(--success); }
+.operationsRuntime.missing { color: var(--warning); }
+
+.operationsFields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.operationsCard input,
+.operationsCard select {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.captureResult {
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.captureResult code {
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
+.inventoryTable,
+.monitorList,
+.timelineList {
+  display: grid;
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.inventoryTable > div {
+  display: grid;
+  grid-template-columns: minmax(110px, 1fr) minmax(130px, 1fr) minmax(90px, 0.8fr) auto;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+}
+
+.inventoryTable em,
+.monitorList em {
+  font-size: 11px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.monitorList > div {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+}
+
+.monitorList em.ready { color: var(--success); }
+.monitorList em.stopped { color: var(--muted); }
+
+.timelineList > div {
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 9px;
+  border-left: 3px solid var(--line);
+  background: var(--surface-2);
+}
+
+.timelineList > div.warning { border-left-color: var(--warning); }
+.timelineList > div.error { border-left-color: var(--danger); }
+
+@media (max-width: 980px) {
+  .operationsGrid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 620px) {
+  .operationsFields,
+  .inventoryTable > div,
+  .monitorList > div { grid-template-columns: 1fr; }
 }

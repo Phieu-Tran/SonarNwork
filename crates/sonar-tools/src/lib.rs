@@ -9,7 +9,15 @@ use std::{
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use sonar_core::{
+    core_interaction_catalog, scanner_interaction_namespace, ExternalScannerKind,
+    InteractionCapability, InteractionCatalog, InteractionNamespace,
+};
 use thiserror::Error;
+
+pub mod history;
+pub mod operations;
+pub mod remote;
 
 pub type Result<T> = std::result::Result<T, ToolError>;
 
@@ -207,8 +215,8 @@ impl ToolCatalog {
         }
 
         let candidates: Vec<PathBuf> = match tool_id {
-            "nmap" => scanner_runtime_candidates("nmap"),
-            "nuclei" => scanner_runtime_candidates("nuclei"),
+            "nmap" | "nuclei" | "httpx" | "naabu" | "subfinder" | "dnsx" | "trippy"
+            | "nexttrace" => scanner_runtime_candidates(tool_id),
             _ => {
                 return Ok(ToolRuntimeStatus {
                     tool_id: tool_id.to_string(),
@@ -220,10 +228,10 @@ impl ToolCatalog {
             }
         };
 
-        let version_args: &[&str] = if tool_id == "nmap" {
-            &["--version"]
-        } else {
-            &["-version"]
+        let version_args: &[&str] = match tool_id {
+            "nmap" => &["--version"],
+            "trippy" | "nexttrace" => &["--version"],
+            _ => &["-version"],
         };
         let mut errors = Vec::new();
 
@@ -244,7 +252,7 @@ impl ToolCatalog {
                         .map(str::trim)
                         .find(|line| !line.is_empty())
                         .map(str::to_string);
-                    if output.status.success() {
+                    if output.status.success() && version_output_matches(tool_id, &combined) {
                         return Ok(ToolRuntimeStatus {
                             tool_id: tool_id.to_string(),
                             available: true,
@@ -253,11 +261,18 @@ impl ToolCatalog {
                             error: None,
                         });
                     }
-                    errors.push(format!(
-                        "{} version command exited with {}",
-                        candidate.display(),
-                        output.status
-                    ));
+                    errors.push(if output.status.success() {
+                        format!(
+                            "{} is not the expected {tool_id} executable",
+                            candidate.display()
+                        )
+                    } else {
+                        format!(
+                            "{} version command exited with {}",
+                            candidate.display(),
+                            output.status
+                        )
+                    });
                 }
                 Err(err) => errors.push(err.to_string()),
             }
@@ -457,6 +472,54 @@ impl ToolCatalog {
         catalog
     }
 
+    pub fn interaction_catalog(&self) -> InteractionCatalog {
+        let mut catalog = core_interaction_catalog();
+        catalog.extend(self.interaction_namespaces());
+        debug_assert!(catalog.validate().is_ok());
+        catalog
+    }
+
+    pub fn interaction_namespaces(&self) -> Vec<InteractionNamespace> {
+        self.tools
+            .iter()
+            .filter_map(|tool| {
+                let kind = ExternalScannerKind::from_tool_id(&tool.id)?;
+                let mut namespace = scanner_interaction_namespace(kind);
+                namespace.label = tool.display_name.clone();
+                namespace.description = tool.notes.clone();
+                namespace
+                    .capabilities
+                    .retain(|capability| match capability {
+                        InteractionCapability::Preview => {
+                            tool.interactions.contains(&ToolInteraction::Preview)
+                        }
+                        InteractionCapability::Run => {
+                            tool.interactions.contains(&ToolInteraction::RunInApp)
+                        }
+                        InteractionCapability::Stop => {
+                            tool.interactions.contains(&ToolInteraction::Stop)
+                        }
+                        InteractionCapability::OpenInCli => {
+                            tool.interactions.contains(&ToolInteraction::OpenInCli)
+                        }
+                        _ => true,
+                    });
+                if matches!(
+                    tool.install_strategy,
+                    InstallStrategy::SystemInstaller
+                        | InstallStrategy::ManagedDownload
+                        | InstallStrategy::AutoDownload
+                ) {
+                    namespace.capabilities.push(InteractionCapability::Install);
+                }
+                if tool.update.update_supported {
+                    namespace.capabilities.push(InteractionCapability::Update);
+                }
+                Some(namespace)
+            })
+            .collect()
+    }
+
     pub fn validate(&self) -> Result<()> {
         let mut ids = HashSet::new();
         for tool in &self.tools {
@@ -510,6 +573,12 @@ impl ToolCatalog {
                 None,
                 "Install or update explicitly into per-user SonarNwork application data.".into(),
             ),
+            InstallStrategy::AutoDownload => (
+                cfg!(target_os = "windows"),
+                true,
+                None,
+                "Install or update explicitly from the tool's allow-listed official GitHub release into per-user SonarNwork application data.".into(),
+            ),
             _ => (false, false, None, descriptor.notes.clone()),
         };
         Ok(ToolLifecyclePlan {
@@ -532,18 +601,22 @@ impl ToolCatalog {
             .ok_or_else(|| ToolError::NotFound(tool_id.to_string()))?;
         if !matches!(
             descriptor.install_strategy,
-            InstallStrategy::ManagedDownload
+            InstallStrategy::ManagedDownload | InstallStrategy::AutoDownload
         ) {
             return Err(ToolError::Operation(format!(
                 "{tool_id} uses a managed installer handoff, not direct binary download"
             )));
         }
-        if tool_id != "nuclei" || !cfg!(target_os = "windows") {
+        if !matches!(
+            tool_id,
+            "nuclei" | "httpx" | "naabu" | "subfinder" | "dnsx" | "trippy" | "nexttrace"
+        ) || !cfg!(target_os = "windows")
+        {
             return Err(ToolError::Operation(format!(
                 "managed installation for {tool_id} is not supported on this platform"
             )));
         }
-        install_latest_nuclei()?;
+        install_latest_managed_tool(tool_id)?;
         self.runtime_status(tool_id)
     }
 
@@ -580,7 +653,7 @@ fn descriptor(
     update: ToolUpdateInfo,
 ) -> ManagedToolDescriptor {
     let (target_kinds, interactions, scope_requirement) = match id {
-        "nmap" => (
+        "nmap" | "naabu" => (
             vec![
                 ToolTargetKind::Host,
                 ToolTargetKind::IpAddress,
@@ -589,10 +662,33 @@ fn descriptor(
             scanner_interactions(),
             ToolScopeRequirement::ActiveTarget,
         ),
-        "nuclei" => (
+        "nuclei" | "httpx" => (
             vec![ToolTargetKind::Url],
             scanner_interactions(),
+            if id == "nuclei" {
+                ToolScopeRequirement::IntrusiveTarget
+            } else {
+                ToolScopeRequirement::ActiveTarget
+            },
+        ),
+        "subfinder" => (
+            vec![ToolTargetKind::Domain],
+            scanner_interactions(),
+            ToolScopeRequirement::ActiveTarget,
+        ),
+        "dnsx" => (
+            vec![ToolTargetKind::Domain],
+            scanner_interactions(),
             ToolScopeRequirement::IntrusiveTarget,
+        ),
+        "trippy" | "nexttrace" => (
+            vec![
+                ToolTargetKind::Host,
+                ToolTargetKind::IpAddress,
+                ToolTargetKind::Domain,
+            ],
+            scanner_interactions(),
+            ToolScopeRequirement::ActiveTarget,
         ),
         _ => (Vec::new(), Vec::new(), ToolScopeRequirement::None),
     };
@@ -635,9 +731,10 @@ fn managed_tool_executable(tool_id: &str) -> Option<PathBuf> {
 
 fn scanner_runtime_candidates(tool_id: &str) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    push_tool_env_candidates(&mut paths, tool_id);
+    let executable_names = scanner_executable_names(tool_id);
+    push_tool_env_candidates(&mut paths, tool_id, executable_names);
     if cfg!(target_os = "windows") {
-        push_managed_and_common_windows_candidates(&mut paths, tool_id);
+        push_managed_and_common_windows_candidates(&mut paths, tool_id, executable_names);
         match tool_id {
             "nmap" => {
                 push_unique(&mut paths, PathBuf::from(r"C:\Program Files\Nmap\nmap.exe"));
@@ -660,14 +757,85 @@ fn scanner_runtime_candidates(tool_id: &str) -> Vec<PathBuf> {
             }
             _ => {}
         }
-        push_unique(&mut paths, PathBuf::from(format!("{tool_id}.exe")));
+        if let Some(home) = std::env::var_os("USERPROFILE").map(PathBuf::from) {
+            for executable in executable_names {
+                push_unique(
+                    &mut paths,
+                    home.join("go")
+                        .join("bin")
+                        .join(format!("{executable}.exe")),
+                );
+                push_unique(
+                    &mut paths,
+                    home.join("scoop")
+                        .join("shims")
+                        .join(format!("{executable}.exe")),
+                );
+            }
+        }
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            for executable in executable_names {
+                push_unique(
+                    &mut paths,
+                    local_app_data
+                        .join("Microsoft")
+                        .join("WinGet")
+                        .join("Links")
+                        .join(format!("{executable}.exe")),
+                );
+            }
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            for directory in std::env::split_paths(&path) {
+                for executable in executable_names {
+                    push_unique(&mut paths, directory.join(format!("{executable}.exe")));
+                }
+            }
+        }
+        for executable in executable_names {
+            push_unique(&mut paths, PathBuf::from(format!("{executable}.exe")));
+        }
     } else {
-        push_unique(&mut paths, PathBuf::from(tool_id));
+        if let Some(path) = std::env::var_os("PATH") {
+            for directory in std::env::split_paths(&path) {
+                for executable in executable_names {
+                    push_unique(&mut paths, directory.join(executable));
+                }
+            }
+        }
+        for executable in executable_names {
+            push_unique(&mut paths, PathBuf::from(executable));
+        }
     }
     paths
 }
 
-fn push_tool_env_candidates(paths: &mut Vec<PathBuf>, tool_id: &str) {
+fn scanner_executable_names(tool_id: &str) -> &'static [&'static str] {
+    match tool_id {
+        "trippy" => &["trip", "trippy"],
+        "nexttrace" => &["nexttrace", "nexttrace-tiny"],
+        "nmap" => &["nmap"],
+        "nuclei" => &["nuclei"],
+        "httpx" => &["httpx"],
+        "naabu" => &["naabu"],
+        "subfinder" => &["subfinder"],
+        "dnsx" => &["dnsx"],
+        _ => &[],
+    }
+}
+
+fn version_output_matches(tool_id: &str, output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    match tool_id {
+        "nmap" => lower.contains("nmap version"),
+        "trippy" => lower.contains("trippy"),
+        "nexttrace" => lower.contains("nexttrace"),
+        "nuclei" | "httpx" | "naabu" | "subfinder" | "dnsx" => lower.contains("current version"),
+        _ => false,
+    }
+}
+
+fn push_tool_env_candidates(paths: &mut Vec<PathBuf>, tool_id: &str, executable_names: &[&str]) {
     let upper = tool_id.to_ascii_uppercase();
     for key in [
         format!("SONARNWORK_{}_PATH", upper),
@@ -676,22 +844,30 @@ fn push_tool_env_candidates(paths: &mut Vec<PathBuf>, tool_id: &str) {
         if let Some(path) = std::env::var_os(key) {
             let path = PathBuf::from(path);
             push_unique(paths, path.clone());
-            if cfg!(target_os = "windows") {
-                push_unique(paths, path.join(format!("{tool_id}.exe")));
-            } else {
-                push_unique(paths, path.join(tool_id));
+            for executable in executable_names {
+                if cfg!(target_os = "windows") {
+                    push_unique(paths, path.join(format!("{executable}.exe")));
+                } else {
+                    push_unique(paths, path.join(executable));
+                }
             }
         }
     }
 }
 
-fn push_managed_and_common_windows_candidates(paths: &mut Vec<PathBuf>, tool_id: &str) {
+fn push_managed_and_common_windows_candidates(
+    paths: &mut Vec<PathBuf>,
+    tool_id: &str,
+    executable_names: &[&str],
+) {
     if let Some(path) = managed_tool_executable(tool_id) {
         push_unique(paths, path);
     }
     let common_tool_dir = PathBuf::from(format!(r"C:\tools\{tool_id}"));
-    push_windows_tool_dir_candidates(paths, tool_id, &common_tool_dir);
-    push_unique(paths, PathBuf::from(format!(r"C:\tools\{tool_id}.exe")));
+    for executable in executable_names {
+        push_windows_tool_dir_candidates(paths, executable, &common_tool_dir);
+        push_unique(paths, PathBuf::from(format!(r"C:\tools\{executable}.exe")));
+    }
     push_unique(paths, common_tool_dir);
 }
 
@@ -732,7 +908,7 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
-fn install_latest_nuclei() -> Result<()> {
+fn install_latest_managed_tool(tool_id: &str) -> Result<()> {
     let _guard = MANAGED_INSTALL_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
@@ -742,8 +918,12 @@ fn install_latest_nuclei() -> Result<()> {
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .map_err(|err| ToolError::Operation(err.to_string()))?;
+    let repository = managed_tool_repository(tool_id)
+        .ok_or_else(|| ToolError::Operation(format!("no managed release policy for {tool_id}")))?;
     let release: GithubRelease = client
-        .get("https://api.github.com/repos/projectdiscovery/nuclei/releases/latest")
+        .get(format!(
+            "https://api.github.com/repos/{repository}/releases/latest"
+        ))
         .send()
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|err| ToolError::Operation(err.to_string()))?
@@ -752,14 +932,14 @@ fn install_latest_nuclei() -> Result<()> {
     let asset = release
         .assets
         .into_iter()
-        .find(|asset| asset.name.ends_with("_windows_amd64.zip"))
+        .find(|asset| managed_windows_asset(tool_id, &asset.name))
         .ok_or_else(|| {
-            ToolError::Operation("official Windows amd64 Nuclei asset was not found".into())
+            ToolError::Operation(format!(
+                "official Windows amd64 {tool_id} asset was not found"
+            ))
         })?;
-    if !asset
-        .browser_download_url
-        .starts_with("https://github.com/projectdiscovery/nuclei/releases/download/")
-    {
+    let allowed_prefix = format!("https://github.com/{repository}/releases/download/");
+    if !asset.browser_download_url.starts_with(&allowed_prefix) {
         return Err(ToolError::Operation(
             "release asset URL is not allow-listed".into(),
         ));
@@ -771,28 +951,46 @@ fn install_latest_nuclei() -> Result<()> {
         .map_err(|err| ToolError::Operation(err.to_string()))?
         .bytes()
         .map_err(|err| ToolError::Operation(err.to_string()))?;
-    let destination = managed_tool_executable("nuclei")
+    let destination = managed_tool_executable(tool_id)
         .ok_or_else(|| ToolError::Operation("LOCALAPPDATA is unavailable".into()))?;
     let parent = destination
         .parent()
         .ok_or_else(|| ToolError::Operation("invalid managed tool directory".into()))?;
     fs::create_dir_all(parent).map_err(|err| ToolError::Operation(err.to_string()))?;
-    let staged = parent.join("nuclei.exe.pending");
-    if let Err(err) = extract_single_executable(&bytes, &staged) {
+    let staged = parent.join(format!("{tool_id}.exe.pending"));
+    let stage_result = if asset.name.ends_with(".zip") {
+        extract_named_executable(&bytes, managed_archive_executable(tool_id), &staged)
+    } else if bytes.is_empty() || bytes.len() as u64 > MAX_NUCLEI_ARCHIVE_BYTES {
+        Err(ToolError::Operation(format!(
+            "{tool_id} executable size is invalid"
+        )))
+    } else {
+        fs::write(&staged, &bytes).map_err(|err| ToolError::Operation(err.to_string()))
+    };
+    if let Err(err) = stage_result {
         let _ = fs::remove_file(&staged);
         return Err(err);
     }
+    let version_args: &[&str] = match tool_id {
+        "trippy" | "nexttrace" => &["--version"],
+        _ => &["-version"],
+    };
     let version = Command::new(&staged)
-        .arg("-version")
+        .args(version_args)
         .output()
         .map_err(|err| ToolError::Operation(err.to_string()))?;
-    if !version.status.success() {
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&version.stdout),
+        String::from_utf8_lossy(&version.stderr)
+    );
+    if !version.status.success() || !version_output_matches(tool_id, &combined) {
         let _ = fs::remove_file(&staged);
-        return Err(ToolError::Operation(
-            "downloaded Nuclei failed its version check".into(),
-        ));
+        return Err(ToolError::Operation(format!(
+            "downloaded {tool_id} failed its version check"
+        )));
     }
-    let backup = parent.join("nuclei.exe.previous");
+    let backup = parent.join(format!("{tool_id}.exe.previous"));
     let had_previous = destination.exists();
     if had_previous {
         let _ = fs::remove_file(&backup);
@@ -809,16 +1007,57 @@ fn install_latest_nuclei() -> Result<()> {
     Ok(())
 }
 
+fn managed_tool_repository(tool_id: &str) -> Option<&'static str> {
+    match tool_id {
+        "nuclei" => Some("projectdiscovery/nuclei"),
+        "httpx" => Some("projectdiscovery/httpx"),
+        "naabu" => Some("projectdiscovery/naabu"),
+        "subfinder" => Some("projectdiscovery/subfinder"),
+        "dnsx" => Some("projectdiscovery/dnsx"),
+        "trippy" => Some("fujiapple852/trippy"),
+        "nexttrace" => Some("nxtrace/NTrace-core"),
+        _ => None,
+    }
+}
+
+fn managed_windows_asset(tool_id: &str, asset_name: &str) -> bool {
+    match tool_id {
+        "trippy" => asset_name.contains("x86_64-pc-windows-msvc") && asset_name.ends_with(".zip"),
+        "nexttrace" => asset_name == "nexttrace_windows_amd64.exe",
+        _ => asset_name.ends_with("_windows_amd64.zip"),
+    }
+}
+
+fn managed_archive_executable(tool_id: &str) -> &str {
+    if tool_id == "trippy" {
+        "trip.exe"
+    } else {
+        match tool_id {
+            "nuclei" => "nuclei.exe",
+            "httpx" => "httpx.exe",
+            "naabu" => "naabu.exe",
+            "subfinder" => "subfinder.exe",
+            "dnsx" => "dnsx.exe",
+            _ => "",
+        }
+    }
+}
+
+#[cfg(test)]
 fn extract_single_executable(bytes: &[u8], destination: &Path) -> Result<()> {
+    extract_named_executable(bytes, "nuclei.exe", destination)
+}
+
+fn extract_named_executable(bytes: &[u8], executable: &str, destination: &Path) -> Result<()> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|err| ToolError::Operation(err.to_string()))?;
     let mut entry = archive
-        .by_name("nuclei.exe")
-        .map_err(|_| ToolError::Operation("Nuclei archive does not contain nuclei.exe".into()))?;
+        .by_name(executable)
+        .map_err(|_| ToolError::Operation(format!("archive does not contain {executable}")))?;
     if entry.size() == 0 || entry.size() > MAX_NUCLEI_ARCHIVE_BYTES {
-        return Err(ToolError::Operation(
-            "Nuclei executable size is invalid".into(),
-        ));
+        return Err(ToolError::Operation(format!(
+            "{executable} size is invalid"
+        )));
     }
     let mut file =
         fs::File::create(destination).map_err(|err| ToolError::Operation(err.to_string()))?;
@@ -962,6 +1201,50 @@ mod tests {
     }
 
     #[test]
+    fn scanner_detection_expands_every_path_directory() {
+        let candidates = scanner_runtime_candidates("nuclei");
+        if let Some(path) = std::env::var_os("PATH") {
+            for directory in std::env::split_paths(&path) {
+                let executable = if cfg!(target_os = "windows") {
+                    directory.join("nuclei.exe")
+                } else {
+                    directory.join("nuclei")
+                };
+                assert!(candidates.contains(&executable), "{}", executable.display());
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_identity_rejects_the_python_httpx_cli() {
+        assert!(!version_output_matches(
+            "httpx",
+            "Usage: httpx [OPTIONS] URL\nError: No such option: -e"
+        ));
+        assert!(version_output_matches(
+            "httpx",
+            "[INF] Current Version: v1.7.2"
+        ));
+    }
+
+    #[test]
+    fn managed_release_assets_are_platform_specific() {
+        assert!(managed_windows_asset(
+            "httpx",
+            "httpx_1.7.2_windows_amd64.zip"
+        ));
+        assert!(managed_windows_asset(
+            "trippy",
+            "trippy-0.13.0-x86_64-pc-windows-msvc.zip"
+        ));
+        assert!(managed_windows_asset(
+            "nexttrace",
+            "nexttrace_windows_amd64.exe"
+        ));
+        assert!(!managed_windows_asset("nexttrace", "ntr_windows_amd64.exe"));
+    }
+
+    #[test]
     fn windows_tool_dir_candidates_include_shallow_extracted_subdirs() {
         let root =
             std::env::temp_dir().join(format!("sonarnwork-tool-detect-{}", std::process::id()));
@@ -982,6 +1265,44 @@ mod tests {
     #[test]
     fn catalog_contract_is_valid() {
         ToolCatalog::phase_zero_defaults().validate().unwrap();
+    }
+
+    #[test]
+    fn interaction_catalog_is_descriptor_driven_and_side_effect_free() {
+        let catalog = ToolCatalog::phase_zero_defaults().interaction_catalog();
+        catalog.validate().unwrap();
+
+        let nmap = catalog.namespace("scanner.nmap").unwrap();
+        assert!(nmap.capabilities.contains(&InteractionCapability::Status));
+        assert!(nmap.capabilities.contains(&InteractionCapability::Install));
+        assert!(nmap.capabilities.contains(&InteractionCapability::Update));
+        assert!(nmap.fields.iter().any(|field| field.id == "ports"));
+
+        let nuclei = catalog.namespace("scanner.nuclei").unwrap();
+        assert!(nuclei
+            .capabilities
+            .contains(&InteractionCapability::Install));
+        assert!(!nuclei.fields.iter().any(|field| field.id == "ports"));
+        assert!(nuclei.requires_scope_confirmation);
+    }
+
+    #[test]
+    fn every_executable_scanner_has_exactly_one_namespace() {
+        let catalog = ToolCatalog::phase_zero_defaults();
+        let namespaces = catalog.interaction_namespaces();
+        for tool in &catalog.tools {
+            if ExternalScannerKind::from_tool_id(&tool.id).is_some() {
+                assert_eq!(
+                    namespaces
+                        .iter()
+                        .filter(|namespace| namespace.id == format!("scanner.{}", tool.id))
+                        .count(),
+                    1,
+                    "{} must have one interaction namespace",
+                    tool.id
+                );
+            }
+        }
     }
 
     #[test]
