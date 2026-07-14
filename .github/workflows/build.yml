@@ -98,6 +98,8 @@ jobs:
 
       - name: Audit Rust dependencies
         uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Test Rust workspace
         run: cargo test --workspace
