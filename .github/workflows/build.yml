@@ -123,11 +123,6 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.SONARNWORK_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build
 
-      - name: Generate CycloneDX SBOM
-        run: |
-          cargo install cargo-cyclonedx --locked --version 0.5.9
-          cargo cyclonedx --format json --all
-
       - name: Package Windows release assets
         shell: pwsh
         run: |
@@ -155,28 +150,10 @@ jobs:
           Copy-Item `
             "target/release/sonar.exe" `
             "$assets/SonarNwork-CLI-$version-windows-x64.exe"
-          Copy-Item "target/release/sonar.exe" "$assets/sonar.exe"
 
           Get-ChildItem "target/release/bundle" -Recurse -File |
             Where-Object { $_.Extension -in ".msi", ".exe" } |
             Copy-Item -Destination $assets
-
-          $sbomStage = Join-Path $env:RUNNER_TEMP "sonarnwork-sbom"
-          Remove-Item $sbomStage -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $sbomStage | Out-Null
-          Get-ChildItem . -Recurse -File |
-            Where-Object { $_.Name -eq "bom.json" -or $_.Name -like "*.cdx.json" } |
-            ForEach-Object {
-              $package = Split-Path $_.DirectoryName -Leaf
-              Copy-Item $_.FullName (Join-Path $sbomStage "$package-$($_.Name)")
-            }
-          if (-not (Get-ChildItem $sbomStage -File)) {
-            throw "cargo-cyclonedx did not produce any JSON SBOM files"
-          }
-          Compress-Archive `
-            -Path "$sbomStage/*" `
-            -DestinationPath "$assets/SonarNwork-$version-CycloneDX-SBOM.zip" `
-            -Force
 
           $checksums = Get-ChildItem $assets -File |
             Sort-Object Name |
