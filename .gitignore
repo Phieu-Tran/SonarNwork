@@ -4,6 +4,7 @@
 /app/dist/
 /app/src-tauri/gen/
 /app/src-tauri/target/
+/app/.tauri/
 /.sonarnwork-test/
 /.playwright-mcp/
 /preview-*.png
