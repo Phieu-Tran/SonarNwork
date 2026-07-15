@@ -177,7 +177,35 @@ fn system_firewall_state() -> Result<FirewallState> {
     })
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "linux")]
+fn system_firewall_state() -> Result<FirewallState> {
+    if let Some((_, output)) = try_command_output("ufw", ["status"]) {
+        let state = parse_ufw_firewall_state(&output);
+        if !matches!(state, FirewallState::Unknown) {
+            return Ok(state);
+        }
+    }
+
+    if let Some((_, output)) = try_command_output("firewall-cmd", ["--state"]) {
+        let state = parse_firewalld_firewall_state(&output);
+        if !matches!(state, FirewallState::Unknown) {
+            return Ok(state);
+        }
+    }
+
+    if let Some((success, output)) = try_command_output("nft", ["list", "ruleset"]) {
+        if success {
+            let state = parse_nftables_firewall_state(&output);
+            if !matches!(state, FirewallState::Unknown) {
+                return Ok(state);
+            }
+        }
+    }
+
+    Ok(FirewallState::Unknown)
+}
+
+#[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
 fn system_firewall_state() -> Result<FirewallState> {
     Ok(FirewallState::Unknown)
 }
@@ -197,6 +225,53 @@ fn command_output<const N: usize>(program: &str, args: [&str; N]) -> Result<Stri
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn try_command_output<const N: usize>(program: &str, args: [&str; N]) -> Option<(bool, String)> {
+    let output = Command::new(program).args(args).output().ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Some((
+        output.status.success(),
+        format!("{stdout}\n{stderr}").trim().to_string(),
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn parse_ufw_firewall_state(output: &str) -> FirewallState {
+    let output = output.to_ascii_lowercase();
+    if output.contains("status: active") {
+        FirewallState::Enabled
+    } else if output.contains("status: inactive") {
+        FirewallState::Disabled
+    } else {
+        FirewallState::Unknown
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_firewalld_firewall_state(output: &str) -> FirewallState {
+    let output = output.trim().to_ascii_lowercase();
+    if output == "running" {
+        FirewallState::Enabled
+    } else if output.contains("not running") {
+        FirewallState::Disabled
+    } else {
+        FirewallState::Unknown
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn parse_nftables_firewall_state(output: &str) -> FirewallState {
+    let output = output.trim().to_ascii_lowercase();
+    if output.is_empty() {
+        FirewallState::Disabled
+    } else if output.contains("hook input") {
+        FirewallState::Enabled
+    } else {
+        FirewallState::Unknown
+    }
 }
 
 fn parse_windows_ipconfig_interfaces(output: &str) -> Vec<Iface> {
@@ -483,5 +558,32 @@ mod tests {
         );
 
         assert_eq!(resolvers.len(), 2);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn classifies_linux_firewall_command_output() {
+        assert!(matches!(
+            parse_ufw_firewall_state("Status: active"),
+            FirewallState::Enabled
+        ));
+        assert!(matches!(
+            parse_ufw_firewall_state("Status: inactive"),
+            FirewallState::Disabled
+        ));
+        assert!(matches!(
+            parse_firewalld_firewall_state("not running"),
+            FirewallState::Disabled
+        ));
+        assert!(matches!(
+            parse_nftables_firewall_state(
+                "table inet filter { chain input { type filter hook input priority 0; } }"
+            ),
+            FirewallState::Enabled
+        ));
+        assert!(matches!(
+            parse_nftables_firewall_state(""),
+            FirewallState::Disabled
+        ));
     }
 }

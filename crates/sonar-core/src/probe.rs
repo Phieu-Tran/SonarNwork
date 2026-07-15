@@ -745,6 +745,12 @@ pub fn ping_invocation(profile: &PingProfile) -> CommandInvocation {
         CommandInvocation::from_parts("ping", args)
     } else {
         let mut args = vec!["-c".to_string(), profile.count.to_string()];
+        #[cfg(target_os = "linux")]
+        {
+            let timeout_seconds = profile.timeout_ms.saturating_add(999) / 1000;
+            args.push("-W".into());
+            args.push(timeout_seconds.max(1).to_string());
+        }
         if let Some(size) = profile.packet_size {
             args.push("-s".into());
             args.push(size.to_string());
@@ -2473,5 +2479,14 @@ mod tests {
         let entity = parse_entity_guess("example.com:443").unwrap();
 
         assert_eq!(reachability_target(&entity), ("example.com".into(), 443));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_ping_uses_a_seconds_timeout() {
+        let invocation = ping_invocation(&PingProfile::new("example.com", 2, 1_500, None));
+
+        assert_eq!(invocation.program, "ping");
+        assert_eq!(invocation.args, vec!["-c", "2", "-W", "2", "example.com"]);
     }
 }
