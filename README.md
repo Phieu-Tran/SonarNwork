@@ -109,11 +109,9 @@ with the version shown on the release page.
 
 ### Linux (Debian / Ubuntu)
 
-- **Desktop app:** download and install
-  `SonarNwork-<version>-linux-x64.deb`.
-- **Standalone CLI:** download and install
-  `SonarNwork-CLI-<version>-linux-x64.deb`. It provides both `sonar` and the
-  compatibility `sonarnwork` command.
+- Download `SonarNwork-<version>-linux-x64.deb`. This one package installs the
+  SonarNwork desktop app, `sonar`, and the compatibility `sonarnwork` command,
+  so `sonar open ui` works without a second download.
 
 ### Install the prebuilt Windows CLI
 
@@ -135,20 +133,14 @@ available in future terminals.
 
 ### Install a Linux `.deb` with `wget`
 
-For the CLI-only package on Debian or Ubuntu:
+On Debian or Ubuntu, one package installs both the CLI and desktop app:
 
 ```bash
 VERSION="0.1.2"
-wget -O sonarnwork-cli.deb "https://github.com/Phieu-Tran/SonarNwork/releases/download/v${VERSION}/SonarNwork-CLI-${VERSION}-linux-x64.deb"
-sudo apt install ./sonarnwork-cli.deb
-sonar --version
-```
-
-For the desktop app, use the same version and replace the package name:
-
-```bash
 wget -O sonarnwork.deb "https://github.com/Phieu-Tran/SonarNwork/releases/download/v${VERSION}/SonarNwork-${VERSION}-linux-x64.deb"
 sudo apt install ./sonarnwork.deb
+sonar --version
+sonar open ui
 ```
 
 ### Build the CLI from source (Rust required)

@@ -265,17 +265,15 @@ jobs:
           test -n "$desktop_deb"
           rm -rf "$assets"
           mkdir -p "$assets"
-          cp "$desktop_deb" "$assets/SonarNwork-${version}-linux-x64.deb"
 
           stage="$(mktemp -d)"
-          mkdir -p "$stage/DEBIAN" "$stage/usr/bin"
-          sed "s/@VERSION@/${version}/" packaging/debian/sonarnwork-cli/control > "$stage/DEBIAN/control"
-          install -m 0755 target/release/sonar "$stage/usr/bin/sonar"
-          ln -s sonar "$stage/usr/bin/sonarnwork"
-          dpkg-deb --root-owner-group --build "$stage" "$assets/SonarNwork-CLI-${version}-linux-x64.deb"
+          package_root="$stage/package"
+          dpkg-deb --raw-extract "$desktop_deb" "$package_root"
+          install -D -m 0755 target/release/sonar "$package_root/usr/bin/sonar"
+          ln -s sonar "$package_root/usr/bin/sonarnwork"
+          rm -f "$package_root/DEBIAN/md5sums"
+          dpkg-deb --root-owner-group --build "$package_root" "$assets/SonarNwork-${version}-linux-x64.deb"
           rm -rf "$stage"
-
-          tar -C target/release -czf "$assets/SonarNwork-CLI-${version}-linux-x64.tar.gz" sonar sonarnwork
 
       - name: Attest release artifacts
         if: startsWith(github.ref, 'refs/tags/v')
