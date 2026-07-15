@@ -1328,10 +1328,7 @@ mod tests {
         assert_ne!(resolved.program, "sonarnwork");
         assert!(
             resolved.program.eq_ignore_ascii_case("cargo")
-                || resolved
-                    .program
-                    .to_ascii_lowercase()
-                    .ends_with("sonarnwork.exe")
+                || super::is_sonarnwork_program(&resolved.program)
         );
     }
 
@@ -1367,8 +1364,13 @@ mod tests {
 
     #[test]
     fn terminal_command_line_opens_sonarnwork_shell_with_autorun() {
+        let executable = format!("sonarnwork{}", std::env::consts::EXE_SUFFIX);
         let invocation = CommandInvocation {
-            program: "C:\\Apps\\SonarNwork\\sonarnwork.exe".into(),
+            program: std::path::PathBuf::from("Apps")
+                .join("SonarNwork")
+                .join(&executable)
+                .to_string_lossy()
+                .into_owned(),
             args: vec!["probe".into(), "list".into()],
         };
 
@@ -1376,7 +1378,7 @@ mod tests {
 
         assert!(line.contains("SONARNWORK_SHELL_AUTORUN"));
         assert!(line.contains("probe list"));
-        assert!(line.contains("sonarnwork.exe"));
+        assert!(line.contains(&executable));
     }
 
     #[test]
