@@ -5,6 +5,7 @@ import {
   defaultScannerPorts,
   liveExitCodeFromLines,
   partitionWorkflowNavigation,
+  primaryNavigationView,
   resultVerdict,
 } from "./App";
 
@@ -31,6 +32,14 @@ describe("workflow navigation", () => {
       "tool_nmap",
       "tool_httpx",
     ]);
+  });
+
+  it("maps workflows into the four primary workspace views", () => {
+    expect(primaryNavigationView("local_network", false)).toBe("diagnose");
+    expect(primaryNavigationView("tool_globalping", false)).toBe("diagnose");
+    expect(primaryNavigationView("tool_nmap", false)).toBe("tools");
+    expect(primaryNavigationView("tool_operations", false)).toBe("operations");
+    expect(primaryNavigationView("tool_nmap", true)).toBe("history");
   });
 });
 

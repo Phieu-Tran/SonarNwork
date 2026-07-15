@@ -1,13 +1,21 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import {
   Activity,
+  Check,
   ChevronDown,
   CircleDot,
   Database,
   Download,
   Globe2,
+  History,
   Languages,
   ListChecks,
   Play,
@@ -17,6 +25,7 @@ import {
   Square,
   SquareTerminal,
   Terminal,
+  Wrench,
 } from "lucide-react";
 import {
   defaultPortForProbe,
@@ -410,6 +419,18 @@ export function partitionWorkflowNavigation<T extends Pick<WorkflowDescriptor, "
     topWorkflows: workflows.filter((workflow) => !PACKAGE_WORKFLOW_IDS.has(workflow.id)),
     packageWorkflows: workflows.filter((workflow) => PACKAGE_WORKFLOW_IDS.has(workflow.id)),
   };
+}
+
+export type PrimaryNavigationView = "diagnose" | "tools" | "operations" | "history";
+
+export function primaryNavigationView(
+  workflowId: string | undefined,
+  historyOpen: boolean,
+): PrimaryNavigationView {
+  if (historyOpen) return "history";
+  if (workflowId && PACKAGE_WORKFLOW_IDS.has(workflowId)) return "tools";
+  if (workflowId === "tool_operations") return "operations";
+  return "diagnose";
 }
 
 const WORKFLOW_TABS: Record<
@@ -880,6 +901,138 @@ const SUMMARY_LABELS: Record<string, Record<Locale, string>> = {
   Lines: { en: "Lines", vi: "Dòng" },
 };
 
+type DiagnosticWorkflowPickerProps = {
+  active: boolean;
+  locale: Locale;
+  onSelect: (workflow: WorkflowDescriptor) => void;
+  value?: string;
+  workflows: WorkflowDescriptor[];
+};
+
+function DiagnosticWorkflowPicker({
+  active,
+  locale,
+  onSelect,
+  value,
+  workflows,
+}: DiagnosticWorkflowPickerProps) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const selectedWorkflow =
+    workflows.find((workflow) => workflow.id === value) ?? workflows[0];
+  const selectedLabel = selectedWorkflow
+    ? workflowCopy(selectedWorkflow.id, locale).label
+    : locale === "vi"
+      ? "Chọn góc chẩn đoán"
+      : "Choose diagnostic view";
+  const pickerLabel = locale === "vi" ? "Chọn góc chẩn đoán" : "Choose diagnostic view";
+
+  useEffect(() => {
+    if (!open) return;
+    const selectedOption = rootRef.current?.querySelector<HTMLButtonElement>(
+      '.primaryNavOption[aria-selected="true"]',
+    );
+    selectedOption?.focus();
+  }, [open]);
+
+  function closeAndRestoreFocus() {
+    setOpen(false);
+    triggerRef.current?.focus();
+  }
+
+  function handleOptionKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>) {
+    const options = Array.from(
+      rootRef.current?.querySelectorAll<HTMLButtonElement>(".primaryNavOption") ?? [],
+    );
+    const currentIndex = options.indexOf(event.currentTarget);
+    let nextIndex = currentIndex;
+
+    if (event.key === "ArrowDown") nextIndex = (currentIndex + 1) % options.length;
+    else if (event.key === "ArrowUp") nextIndex = (currentIndex - 1 + options.length) % options.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = options.length - 1;
+    else if (event.key === "Escape") {
+      event.preventDefault();
+      closeAndRestoreFocus();
+      return;
+    } else return;
+
+    event.preventDefault();
+    options[nextIndex]?.focus();
+  }
+
+  return (
+    <div
+      ref={rootRef}
+      aria-current={active ? "page" : undefined}
+      className={`primaryNavSelect ${active ? "active" : ""}`}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
+      <span className="primaryNavLabel" id="diagnostic-workflow-label">
+        <ListChecks size={15} />
+        {locale === "vi" ? "Chẩn đoán" : "Diagnose"}
+      </span>
+      <div className="primaryNavSelectControl">
+        <button
+          ref={triggerRef}
+          type="button"
+          className="primaryNavSelectTrigger"
+          aria-controls="diagnostic-workflow-menu"
+          aria-expanded={open}
+          aria-haspopup="listbox"
+          aria-label={`${pickerLabel}: ${selectedLabel}`}
+          onClick={() => setOpen((current) => !current)}
+          onKeyDown={(event) => {
+            if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+              event.preventDefault();
+              setOpen(true);
+            } else if (event.key === "Escape" && open) {
+              event.preventDefault();
+              setOpen(false);
+            }
+          }}
+        >
+          <span>{selectedLabel}</span>
+          <ChevronDown className={open ? "open" : ""} size={15} />
+        </button>
+        {open ? (
+          <div
+            className="primaryNavMenu"
+            id="diagnostic-workflow-menu"
+            role="listbox"
+            aria-labelledby="diagnostic-workflow-label"
+          >
+            {workflows.map((workflow) => {
+              const selected = workflow.id === selectedWorkflow?.id;
+              return (
+                <button
+                  type="button"
+                  className="primaryNavOption"
+                  data-workflow-id={workflow.id}
+                  key={workflow.id}
+                  role="option"
+                  aria-selected={selected}
+                  onClick={() => {
+                    onSelect(workflow);
+                    closeAndRestoreFocus();
+                  }}
+                  onKeyDown={handleOptionKeyDown}
+                >
+                  <Check size={14} />
+                  <span>{workflowCopy(workflow.id, locale).label}</span>
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [locale, setLocale] = useState<Locale>(getInitialLocale);
   const [theme, setTheme] = useState<ThemeMode>(getInitialTheme);
@@ -898,6 +1051,7 @@ export default function App() {
   const [selectedProbeId, setSelectedProbeId] = useState(DEFAULT_PROBE_ID);
   const [result, setResult] = useState<ProbeRunView | null>(null);
   const [historyRevision, setHistoryRevision] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [commandPreview, setCommandPreview] = useState<CommandPreview | null>(null);
   const [commandText, setCommandText] = useState("");
   const [commandDirty, setCommandDirty] = useState(false);
@@ -914,6 +1068,7 @@ export default function App() {
   const liveRunIdRef = useRef<string | null>(null);
   const liveStoppedRef = useRef(false);
   const liveConsoleRef = useRef<HTMLPreElement | null>(null);
+  const lastPackageWorkflowIdRef = useRef<string | null>(null);
 
   const workflowList = useMemo(
     () => uiWorkflows(workflows.length > 0 ? workflows : fallbackWorkflows(), catalog),
@@ -927,6 +1082,22 @@ export default function App() {
     workflowList.find((workflow) => workflow.id === activeWorkflowId) ?? workflowList[0];
   const activeWorkflowCopy = workflowCopy(activeWorkflow?.id, locale);
   const activeToolId = toolIdForWorkflow(activeWorkflow?.id);
+  const diagnosticWorkflows = useMemo(
+    () => topWorkflows.filter((workflow) => workflow.id !== "tool_operations"),
+    [topWorkflows],
+  );
+  const operationsWorkflow = topWorkflows.find(
+    (workflow) => workflow.id === "tool_operations",
+  );
+  const showPackageSidebar = Boolean(
+    activeWorkflow?.id && PACKAGE_WORKFLOW_IDS.has(activeWorkflow.id),
+  );
+  const activePrimaryView = primaryNavigationView(activeWorkflow?.id, historyOpen);
+  const diagnosticWorkflowValue = diagnosticWorkflows.some(
+    (workflow) => workflow.id === activeWorkflow?.id,
+  )
+    ? activeWorkflow?.id
+    : diagnosticWorkflows[0]?.id;
   const activeManagedTool = useMemo(
     () => (activeToolId ? managedToolForId(managedTools, activeToolId) : undefined),
     [activeToolId, managedTools],
@@ -1262,6 +1433,10 @@ export default function App() {
   }
 
   function selectWorkflow(workflow: WorkflowDescriptor) {
+    setHistoryOpen(false);
+    if (PACKAGE_WORKFLOW_IDS.has(workflow.id)) {
+      lastPackageWorkflowIdRef.current = workflow.id;
+    }
     setActiveWorkflowId(workflow.id);
     if (toolIdForWorkflow(workflow.id)) {
       setEntity(null);
@@ -1580,6 +1755,19 @@ export default function App() {
     setResult(saved.result as ProbeRunView);
   }
 
+  function openTools() {
+    const workflow =
+      packageWorkflows.find(
+        (candidate) => candidate.id === lastPackageWorkflowIdRef.current,
+      ) ?? packageWorkflows[0];
+    if (workflow) selectWorkflow(workflow);
+  }
+
+  function openHistory() {
+    setHistoryOpen(true);
+    setError(null);
+  }
+
   return (
     <main
       className="shell"
@@ -1598,20 +1786,48 @@ export default function App() {
           </div>
 
           <nav
-            className="topTabs"
-            aria-label={locale === "vi" ? "Luồng công việc SonarNwork" : "SonarNwork workflows"}
+            className="primaryNav"
+            aria-label={locale === "vi" ? "Điều hướng chính" : "Primary navigation"}
           >
-            {topWorkflows.map((workflow) => (
-              <button
-                aria-current={workflow.id === activeWorkflow?.id ? "page" : undefined}
-                className={workflow.id === activeWorkflow?.id ? "active" : ""}
-                data-workflow-id={workflow.id}
-                key={workflow.id}
-                onClick={() => selectWorkflow(workflow)}
-              >
-                {workflowCopy(workflow.id, locale).label}
-              </button>
-            ))}
+            <DiagnosticWorkflowPicker
+              active={activePrimaryView === "diagnose"}
+              locale={locale}
+              onSelect={selectWorkflow}
+              value={diagnosticWorkflowValue}
+              workflows={diagnosticWorkflows}
+            />
+            <button
+              type="button"
+              data-primary-view="tools"
+              aria-current={activePrimaryView === "tools" ? "page" : undefined}
+              className={`primaryNavButton ${activePrimaryView === "tools" ? "active" : ""}`}
+              disabled={packageWorkflows.length === 0}
+              onClick={openTools}
+            >
+              <Wrench size={15} />
+              <span>{locale === "vi" ? "Công cụ" : "Tools"}</span>
+            </button>
+            <button
+              type="button"
+              data-primary-view="operations"
+              aria-current={activePrimaryView === "operations" ? "page" : undefined}
+              className={`primaryNavButton ${activePrimaryView === "operations" ? "active" : ""}`}
+              disabled={!operationsWorkflow}
+              onClick={() => operationsWorkflow && selectWorkflow(operationsWorkflow)}
+            >
+              <Activity size={15} />
+              <span>{locale === "vi" ? "Vận hành" : "Operations"}</span>
+            </button>
+            <button
+              type="button"
+              data-primary-view="history"
+              aria-current={activePrimaryView === "history" ? "page" : undefined}
+              className={`primaryNavButton ${activePrimaryView === "history" ? "active" : ""}`}
+              onClick={openHistory}
+            >
+              <History size={15} />
+              <span>{locale === "vi" ? "Lịch sử" : "History"}</span>
+            </button>
           </nav>
 
           <div className="topTools">
@@ -1633,8 +1849,9 @@ export default function App() {
           </div>
         </header>
 
-        <section className="appBody">
-          <aside
+        <section className={`appBody ${showPackageSidebar ? "hasPackageSidebar" : ""}`}>
+          {showPackageSidebar ? (
+            <aside
             className="packageSidebar"
             aria-label={locale === "vi" ? "Các gói công cụ" : "Tool packages"}
           >
@@ -1650,11 +1867,11 @@ export default function App() {
             </header>
 
             <nav className="packageNav">
-              {packageWorkflows.map((workflow) => {
-                const copy = workflowCopy(workflow.id, locale);
-                const active = workflow.id === activeWorkflow?.id;
-                const logo = PACKAGE_LOGOS[workflow.id];
-                return (
+                {packageWorkflows.map((workflow) => {
+                  const copy = workflowCopy(workflow.id, locale);
+                  const active = workflow.id === activeWorkflow?.id;
+                  const logo = PACKAGE_LOGOS[workflow.id];
+                  return (
                   <button
                     aria-current={active ? "page" : undefined}
                     className={active ? "active" : ""}
@@ -1663,13 +1880,25 @@ export default function App() {
                     onClick={() => selectWorkflow(workflow)}
                     title={`${copy.title} — ${copy.description}`}
                   >
-                    <span className="packageGlyph" aria-hidden="true">
+                    <span className="packageGlyph" data-package-id={workflow.id} aria-hidden="true">
                       {logo ? (
-                        <img
-                          alt=""
-                          className={`packageLogo packageLogo--${logo.variant}`}
-                          src={logo.src}
-                        />
+                        <>
+                          <img
+                            alt=""
+                            className={`packageLogo packageLogo--${logo.variant}`}
+                            src={logo.src}
+                            onError={(event) => {
+                              event.currentTarget.hidden = true;
+                              const fallback = event.currentTarget.nextElementSibling;
+                              if (fallback instanceof HTMLElement) {
+                                fallback.hidden = false;
+                              }
+                            }}
+                          />
+                          <span className="packageLogoFallback" hidden>
+                            {PACKAGE_GLYPHS[workflow.id] ?? "•"}
+                          </span>
+                        </>
                       ) : (
                         PACKAGE_GLYPHS[workflow.id] ?? "•"
                       )}
@@ -1688,16 +1917,42 @@ export default function App() {
                 ? "Các CLI tùy chọn. App sẽ dò runtime trước khi chạy."
                 : "Optional CLIs. The app detects each runtime before running it."}
             </p>
-          </aside>
+            </aside>
+          ) : null}
 
           <section className="workspace">
           <header className="questionHeader">
-            <p>{activeWorkflowCopy.eyebrow}</p>
-            <h1>{activeWorkflowCopy.title}</h1>
-            <span>{activeWorkflowCopy.description}</span>
+            <p>
+              {historyOpen
+                ? locale === "vi"
+                  ? "Hồ sơ chẩn đoán"
+                  : "Diagnostic record"
+                : activeWorkflowCopy.eyebrow}
+            </p>
+            <h1>
+              {historyOpen
+                ? locale === "vi"
+                  ? "Lịch sử và so sánh kết quả"
+                  : "History and result comparison"
+                : activeWorkflowCopy.title}
+            </h1>
+            <span>
+              {historyOpen
+                ? locale === "vi"
+                  ? "Tìm lại lần chạy đã lưu, mở chi tiết hoặc so sánh hai kết quả."
+                  : "Find saved runs, reopen their details, or compare two results."
+                : activeWorkflowCopy.description}
+            </span>
           </header>
 
-          {activeToolId ? (
+          {historyOpen ? (
+            <HistoryPanel
+              locale={locale}
+              refreshToken={historyRevision}
+              onOpenRun={openSavedRun}
+              onStorageError={(message) => setError(message)}
+            />
+          ) : activeToolId ? (
             activeToolId === "globalping" ? (
               <RemoteMeasurementPage locale={locale} />
             ) : activeToolId === "operations" ? (
@@ -1711,25 +1966,52 @@ export default function App() {
               />
             )
           ) : (
-            <>
-          <section
-            className="checkGrid"
-            aria-label={locale === "vi" ? "Kiểm tra đề xuất" : "Recommended checks"}
-          >
-            {workflowTools.map((probe) => (
-              <CheckCard
-                key={probe.id}
-                probe={probe}
-                locale={locale}
-                active={probe.id === selectedProbe?.id}
-                workflowId={activeWorkflow?.id}
-                disabled={probe.status === "planned"}
-                onSelect={() => selectProbe(probe)}
-              />
-            ))}
-          </section>
+            <div className="diagnosticWorkbench">
+              <aside
+                className="checkRail"
+                aria-label={locale === "vi" ? "Bộ kiểm tra" : "Check picker"}
+              >
+                <div className="checkRailHeader">
+                  <div>
+                    <small>{locale === "vi" ? "Bộ kiểm tra" : "Check set"}</small>
+                    <strong>{locale === "vi" ? "Chọn phép đo" : "Choose a measurement"}</strong>
+                  </div>
+                  <span>{workflowTools.length}</span>
+                </div>
+                <label className="compactCheckPicker">
+                  <span>{locale === "vi" ? "Kiểm tra đang chọn" : "Selected check"}</span>
+                  <select
+                    name="diagnostic-check"
+                    value={selectedProbe?.id ?? ""}
+                    onChange={(event) => selectProbeId(event.target.value)}
+                  >
+                    {workflowTools.map((probe) => (
+                      <option key={probe.id} value={probe.id}>
+                        {checkCopy(probe, locale, activeWorkflow?.id).title}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <section
+                  className="checkGrid"
+                  aria-label={locale === "vi" ? "Kiểm tra đề xuất" : "Recommended checks"}
+                >
+                  {workflowTools.map((probe) => (
+                    <CheckCard
+                      key={probe.id}
+                      probe={probe}
+                      locale={locale}
+                      active={probe.id === selectedProbe?.id}
+                      workflowId={activeWorkflow?.id}
+                      disabled={probe.status === "planned"}
+                      onSelect={() => selectProbe(probe)}
+                    />
+                  ))}
+                </section>
+              </aside>
 
-          {error ? <p className="errorBanner">{error}</p> : null}
+              <div className="diagnosticStage">
+          {error ? <p className="errorBanner" role="alert">{error}</p> : null}
 
           {selectedProbe ? (
             <section className={`runPanel direction-${directionClass(selectedProbe.id)}`}>
@@ -1744,6 +2026,7 @@ export default function App() {
                   <label className="targetInput">
                     <Search size={15} />
                     <input
+                      name="diagnostic-target"
                       value={target}
                       placeholder={
                         activeWorkflow?.id === "public_service"
@@ -1771,6 +2054,7 @@ export default function App() {
                   <label className="portInput">
                     <span>{locale === "vi" ? "Cổng" : "Port"}</span>
                     <input
+                      name="diagnostic-port"
                       value={targetPort}
                       inputMode="numeric"
                       onChange={(event) => setTargetPort(event.target.value)}
@@ -1838,6 +2122,7 @@ export default function App() {
                     <label className="commandEditor">
                       <SquareTerminal size={14} />
                       <textarea
+                        name="command-preview"
                         value={commandText}
                         spellCheck={false}
                         aria-label={locale === "vi" ? "Xem trước lệnh CLI" : "CLI command preview"}
@@ -1926,15 +2211,23 @@ export default function App() {
                 ))}
               </dl>
             ) : (
-              <p className="emptyResult">
-                {selectedRequiresRemote
-                  ? locale === "vi"
-                    ? "Phần nhìn từ internet cần remote vantage/token, chưa chạy bằng lệnh local."
-                    : "Outside visibility needs a remote vantage/token and is not faked locally."
-                  : locale === "vi"
-                    ? "Chạy check để xem verdict và summary rows."
-                    : "Run a check to see the answer here."}
-              </p>
+              <div className="emptyResult emptyState">
+                <ListChecks size={20} />
+                <strong>
+                  {locale === "vi"
+                    ? "Chưa có dữ liệu chẩn đoán"
+                    : "No diagnostic data yet"}
+                </strong>
+                <span>
+                  {selectedRequiresRemote
+                    ? locale === "vi"
+                      ? "Phần nhìn từ internet cần remote vantage/token, chưa chạy bằng lệnh local."
+                      : "Outside visibility needs a remote vantage/token and is not faked locally."
+                    : locale === "vi"
+                      ? "Chạy check để xem verdict và các dòng tóm tắt."
+                      : "Run a check to see the verdict and summary rows."}
+                </span>
+              </div>
             )}
 
             {result?.output.warnings && result.output.warnings.length > 0 ? (
@@ -1966,16 +2259,9 @@ export default function App() {
               <pre>{rawOutput}</pre>
             </details>
           </section>
-
-            </>
+              </div>
+            </div>
           )}
-
-          <HistoryPanel
-            locale={locale}
-            refreshToken={historyRevision}
-            onOpenRun={openSavedRun}
-            onStorageError={(message) => setError(message)}
-          />
 
           <footer className="contextFooter">
             <span title={dnsTitle}>
@@ -2018,11 +2304,14 @@ function CheckCard({
   const copy = checkCopy(probe, locale, workflowId);
   return (
     <button
+      type="button"
       className={`checkCard direction-${directionClass(probe.id)} ${
         active ? "active" : ""
       } ${compact ? "compact" : ""} ${
         disabled ? "planned" : ""
       }`}
+      aria-pressed={active}
+      aria-disabled={disabled || undefined}
       onClick={onSelect}
     >
       <small>{copy.eyebrow}</small>
@@ -2499,6 +2788,7 @@ function ManagedToolPage({
                 <label>
                   <span>{locale === "vi" ? "Mục tiêu" : "Target"}</span>
                   <input
+                    name="scanner-target"
                     value={target}
                     onChange={(event) => {
                       setTarget(event.target.value);
@@ -2515,6 +2805,7 @@ function ManagedToolPage({
                   <label>
                     <span>{locale === "vi" ? "Chế độ" : "Profile"}</span>
                     <select
+                      name="scanner-profile"
                       value={scanProfile}
                       onChange={(event) => {
                         setScanProfile(event.target.value as ScannerProfileId);
@@ -2537,6 +2828,7 @@ function ManagedToolPage({
                   <label>
                     <span>{locale === "vi" ? "Cổng" : "Ports"}</span>
                     <select
+                      name="scanner-ports"
                       value={scanPorts}
                       onChange={(event) => {
                         setScanPorts(event.target.value as ScannerPortsId);
@@ -2559,6 +2851,7 @@ function ManagedToolPage({
                     <label>
                       <span>{locale === "vi" ? "Danh sách port" : "Port list"}</span>
                       <input
+                        name="scanner-custom-ports"
                         value={customPorts}
                         onChange={(event) => {
                           setCustomPorts(event.target.value);
@@ -2577,6 +2870,7 @@ function ManagedToolPage({
                   <label>
                     <span>{portsField.label}</span>
                     <input
+                      name="scanner-custom-ports"
                       value={customPorts}
                       onChange={(event) => {
                         setCustomPorts(event.target.value);
@@ -2592,6 +2886,7 @@ function ManagedToolPage({
               {requiresScopeConfirmation ? (
                 <label className="scopeConfirmation scannerScope">
                   <input
+                    name="scanner-scope-confirmed"
                     type="checkbox"
                     checked={scopeConfirmed}
                     onChange={(event) => {
@@ -2743,7 +3038,11 @@ function OperationsPage({ locale }: { locale: Locale }) {
 
   useEffect(() => {
     if (!hasTauriRuntime()) {
-      setError(locale === "vi" ? "Các thao tác này cần ứng dụng desktop." : "These operations require the desktop app.");
+      const message = locale === "vi"
+        ? "Các thao tác này cần ứng dụng desktop."
+        : "These operations require the desktop app.";
+      setCaptureRuntime({ available: false, error: message });
+      setError(message);
       return;
     }
     let disposed = false;
@@ -2857,7 +3156,7 @@ function OperationsPage({ locale }: { locale: Locale }) {
 
   return (
     <section className="operationsPage">
-      {error ? <div className="toolUpdatePlan error">{error}</div> : null}
+      {error ? <div className="errorBanner" role="alert">{error}</div> : null}
       <div className="operationsGrid">
         <article className="operationsCard">
           <header><div><strong>{locale === "vi" ? "Bắt gói tin" : "Packet capture"}</strong><span>{locale === "vi" ? "TShark → pcapng → mở bằng Wireshark" : "TShark → pcapng → Wireshark handoff"}</span></div></header>
@@ -2865,39 +3164,39 @@ function OperationsPage({ locale }: { locale: Locale }) {
             <CircleDot size={16} />
             <span>{captureRuntime?.version ?? captureRuntime?.error ?? (locale === "vi" ? "Đang dò TShark…" : "Detecting TShark…")}</span>
           </div>
-          <label><span>{locale === "vi" ? "Giao diện mạng" : "Interface"}</span><select value={interfaceId} onChange={(event) => setInterfaceId(event.target.value)} disabled={!captureRuntime?.available}>{interfaces.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <label><span>{locale === "vi" ? "Giao diện mạng" : "Interface"}</span><select name="capture-interface" value={interfaceId} onChange={(event) => setInterfaceId(event.target.value)} disabled={!captureRuntime?.available}>{interfaces.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
           <div className="operationsFields">
-            <label><span>{locale === "vi" ? "Thời gian (giây)" : "Duration (seconds)"}</span><input type="number" min="1" max="300" value={durationSeconds} onChange={(event) => setDurationSeconds(event.target.value)} /></label>
-            <label><span>{locale === "vi" ? "Giới hạn packet" : "Packet limit"}</span><input type="number" min="1" max="100000" value={packetLimit} onChange={(event) => setPacketLimit(event.target.value)} /></label>
+            <label><span>{locale === "vi" ? "Thời gian (giây)" : "Duration (seconds)"}</span><input name="capture-duration" type="number" min="1" max="300" value={durationSeconds} onChange={(event) => setDurationSeconds(event.target.value)} /></label>
+            <label><span>{locale === "vi" ? "Giới hạn packet" : "Packet limit"}</span><input name="capture-packet-limit" type="number" min="1" max="100000" value={packetLimit} onChange={(event) => setPacketLimit(event.target.value)} /></label>
           </div>
-          <label className="remoteScopeCheck"><input type="checkbox" checked={captureScope} onChange={(event) => setCaptureScope(event.target.checked)} /><span>{locale === "vi" ? "Tôi được phép capture trên interface này." : "I am authorized to capture on this interface."}</span></label>
+          <label className="remoteScopeCheck"><input name="capture-scope-confirmed" type="checkbox" checked={captureScope} onChange={(event) => setCaptureScope(event.target.checked)} /><span>{locale === "vi" ? "Tôi được phép capture trên interface này." : "I am authorized to capture on this interface."}</span></label>
           <button className="primaryRunButton" onClick={() => void runCapture()} disabled={!captureRuntime?.available || !interfaceId || !captureScope || captureBusy}><Play size={16} />{captureBusy ? (locale === "vi" ? "Đang bắt gói…" : "Capturing…") : (locale === "vi" ? "Bắt gói" : "Capture")}</button>
           {captureResult ? <div className="captureResult"><code>{captureResult.path}</code><span>{formatBytes(captureResult.bytes)}</span><button onClick={() => void invoke("open_capture_handoff", { path: captureResult.path })}>{locale === "vi" ? "Mở / bàn giao" : "Open / hand off"}</button></div> : null}
         </article>
 
         <article className="operationsCard">
-          <header><div><strong>{locale === "vi" ? "Inventory thiết bị" : "Device inventory"}</strong><span>{locale === "vi" ? "Đọc neighbor table, không chủ động quét." : "Reads the neighbor table; no active scan."}</span></div><button onClick={() => void refreshInventory()} disabled={inventoryBusy}><RefreshCw size={15} />{locale === "vi" ? "Làm mới" : "Refresh"}</button></header>
+          <header><div><strong>{locale === "vi" ? "Inventory thiết bị" : "Device inventory"}</strong><span>{locale === "vi" ? "Đọc neighbor table, không chủ động quét." : "Reads the neighbor table; no active scan."}</span></div><button onClick={() => void refreshInventory()} disabled={inventoryBusy}><RefreshCw size={15} />{inventoryBusy ? (locale === "vi" ? "Đang đọc…" : "Loading…") : (locale === "vi" ? "Làm mới" : "Refresh")}</button></header>
           <div className="inventoryTable">
-            {inventory?.devices.length ? inventory.devices.map((device) => <div key={`${device.interface}-${device.ip}-${device.mac}`}><strong>{device.ip}</strong><span>{device.mac ?? "—"}</span><span>{device.interface ?? "—"}</span><em>{device.state}</em></div>) : <p>{locale === "vi" ? "Chưa thu thập inventory." : "No inventory collected yet."}</p>}
+            {inventoryBusy ? <div className="emptyState loading" role="status"><RefreshCw size={19} /><strong>{locale === "vi" ? "Đang đọc neighbor table" : "Reading neighbor table"}</strong><span>{locale === "vi" ? "Không thực hiện active scan." : "No active scan is performed."}</span></div> : inventory?.devices.length ? inventory.devices.map((device) => <div key={`${device.interface}-${device.ip}-${device.mac}`}><strong>{device.ip}</strong><span>{device.mac ?? "—"}</span><span>{device.interface ?? "—"}</span><em>{device.state}</em></div>) : <div className="emptyState"><Database size={20} /><strong>{locale === "vi" ? "Chưa có inventory" : "No inventory yet"}</strong><span>{locale === "vi" ? "Chọn Làm mới để đọc các neighbor đã biết." : "Refresh to read known neighbors."}</span></div>}
           </div>
         </article>
 
         <article className="operationsCard monitorCard">
           <header><div><strong>{locale === "vi" ? "Monitoring nền" : "Background monitoring"}</strong><span>{locale === "vi" ? "Chạy khi desktop app đang mở; cấu hình tự khôi phục." : "Runs while the desktop app is open; configurations resume automatically."}</span></div></header>
           <div className="operationsFields monitorFields">
-            <label><span>{locale === "vi" ? "Đích" : "Target"}</span><input value={monitorTarget} onChange={(event) => setMonitorTarget(event.target.value)} /></label>
-            <label><span>{locale === "vi" ? "Chu kỳ (giây)" : "Interval (seconds)"}</span><input type="number" min="15" max="86400" value={monitorInterval} onChange={(event) => setMonitorInterval(event.target.value)} /></label>
-            <label><span>{locale === "vi" ? "Cảnh báo độ trễ (ms)" : "Latency alert (ms)"}</span><input type="number" min="1" max="120000" value={latencyThreshold} onChange={(event) => setLatencyThreshold(event.target.value)} /></label>
-            <label><span>{locale === "vi" ? "Cảnh báo mất gói (%)" : "Loss alert (%)"}</span><input type="number" min="0" max="100" value={lossThreshold} onChange={(event) => setLossThreshold(event.target.value)} /></label>
+            <label><span>{locale === "vi" ? "Đích" : "Target"}</span><input name="monitor-target" value={monitorTarget} onChange={(event) => setMonitorTarget(event.target.value)} /></label>
+            <label><span>{locale === "vi" ? "Chu kỳ (giây)" : "Interval (seconds)"}</span><input name="monitor-interval" type="number" min="15" max="86400" value={monitorInterval} onChange={(event) => setMonitorInterval(event.target.value)} /></label>
+            <label><span>{locale === "vi" ? "Cảnh báo độ trễ (ms)" : "Latency alert (ms)"}</span><input name="monitor-latency-threshold" type="number" min="1" max="120000" value={latencyThreshold} onChange={(event) => setLatencyThreshold(event.target.value)} /></label>
+            <label><span>{locale === "vi" ? "Cảnh báo mất gói (%)" : "Loss alert (%)"}</span><input name="monitor-loss-threshold" type="number" min="0" max="100" value={lossThreshold} onChange={(event) => setLossThreshold(event.target.value)} /></label>
           </div>
-          <label className="remoteScopeCheck"><input type="checkbox" checked={monitorScope} onChange={(event) => setMonitorScope(event.target.checked)} /><span>{locale === "vi" ? "Tôi được phép monitor đích này." : "I am authorized to monitor this target."}</span></label>
+          <label className="remoteScopeCheck"><input name="monitor-scope-confirmed" type="checkbox" checked={monitorScope} onChange={(event) => setMonitorScope(event.target.checked)} /><span>{locale === "vi" ? "Tôi được phép monitor đích này." : "I am authorized to monitor this target."}</span></label>
           <button className="primaryRunButton" onClick={() => void addMonitor()} disabled={!monitorScope || monitorBusy}><Activity size={16} />{locale === "vi" ? "Bắt đầu monitor" : "Start monitor"}</button>
-          <div className="monitorList">{monitors.map((monitor) => <div key={monitor.id}><div><strong>{monitor.target}</strong><span>{monitor.intervalSeconds}s · {monitor.latencyAlertMs}ms · {monitor.lossAlertPercent}%</span></div><em className={monitor.enabled ? "ready" : "stopped"}>{monitor.enabled ? (locale === "vi" ? "đang chạy" : "running") : (locale === "vi" ? "đã dừng" : "stopped")}</em>{monitor.enabled ? <button onClick={() => void disableMonitor(monitor.id)}><Square size={14} />{locale === "vi" ? "Dừng" : "Stop"}</button> : null}</div>)}</div>
+          <div className="monitorList">{monitors.length ? monitors.map((monitor) => <div key={monitor.id}><div><strong>{monitor.target}</strong><span>{monitor.intervalSeconds}s · {monitor.latencyAlertMs}ms · {monitor.lossAlertPercent}%</span></div><em className={monitor.enabled ? "ready" : "stopped"}>{monitor.enabled ? (locale === "vi" ? "đang chạy" : "running") : (locale === "vi" ? "đã dừng" : "stopped")}</em>{monitor.enabled ? <button onClick={() => void disableMonitor(monitor.id)}><Square size={14} />{locale === "vi" ? "Dừng" : "Stop"}</button> : null}</div>) : <div className="emptyState"><Activity size={20} /><strong>{locale === "vi" ? "Chưa có monitor" : "No monitors yet"}</strong><span>{locale === "vi" ? "Nhập đích, xác nhận phạm vi rồi bắt đầu." : "Enter a target, confirm scope, then start."}</span></div>}</div>
         </article>
 
         <article className="operationsCard timelineCard">
           <header><div><strong>{locale === "vi" ? "Dòng thời gian & cảnh báo" : "Timeline & alerts"}</strong><span>{timeline.length}/1000 {locale === "vi" ? "sự kiện" : "events"}</span></div><button onClick={() => void clearEvents()} disabled={!timeline.length}>{locale === "vi" ? "Xóa" : "Clear"}</button></header>
-          <div className="timelineList">{timeline.length ? timeline.map((event) => <div key={event.id} className={event.severity}><CircleDot size={14} /><div><strong>{event.title}</strong><span>{event.detail}</span><small>{new Date(event.createdAt * 1000).toLocaleString()} · {event.kind}</small></div></div>) : <p>{locale === "vi" ? "Chưa có sự kiện." : "No events yet."}</p>}</div>
+          <div className="timelineList">{timeline.length ? timeline.map((event) => <div key={event.id} className={event.severity}><CircleDot size={14} /><div><strong>{event.title}</strong><span>{event.detail}</span><small>{new Date(event.createdAt * 1000).toLocaleString()} · {event.kind}</small></div></div>) : <div className="emptyState"><CircleDot size={20} /><strong>{locale === "vi" ? "Dòng thời gian đang trống" : "Timeline is empty"}</strong><span>{locale === "vi" ? "Sự kiện monitor và cảnh báo sẽ xuất hiện ở đây." : "Monitor events and alerts will appear here."}</span></div>}</div>
         </article>
       </div>
     </section>

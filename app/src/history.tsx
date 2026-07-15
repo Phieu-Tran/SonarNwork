@@ -1,6 +1,13 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { GitCompareArrows, History, Search, Trash2 } from "lucide-react";
+import {
+  FolderOpen,
+  GitCompareArrows,
+  History,
+  LoaderCircle,
+  Search,
+  Trash2,
+} from "lucide-react";
 
 type SummaryFact = { label: string; value: string };
 
@@ -78,8 +85,10 @@ export function HistoryPanel({ locale, refreshToken, onOpenRun, onStorageError }
   const [runs, setRuns] = useState<SavedRunSummary[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [comparison, setComparison] = useState<RunComparison | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
   async function loadRuns(nextQuery = query) {
+    setIsLoading(true);
     try {
       const saved = await invoke<SavedRunSummary[]>("list_probe_runs", {
         query: nextQuery.trim() || null,
@@ -88,6 +97,8 @@ export function HistoryPanel({ locale, refreshToken, onOpenRun, onStorageError }
       setSelected((items) => items.filter((id) => saved.some((run) => run.id === id)));
     } catch (error) {
       onStorageError(String(error));
+    } finally {
+      setIsLoading(false);
     }
   }
 
@@ -146,16 +157,29 @@ export function HistoryPanel({ locale, refreshToken, onOpenRun, onStorageError }
         <form className="historySearch" onSubmit={(event) => { event.preventDefault(); void loadRuns(); }}>
           <Search size={16} />
           <input
+            name="history-search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder={vi ? "Tìm mục tiêu, kiểm tra, kết luận…" : "Search target, check, verdict…"}
             aria-label={vi ? "Tìm lịch sử" : "Search history"}
           />
         </form>
+        <p className="historySelectionHint">
+          {vi
+            ? "Chọn đúng hai lần chạy để xem phần thay đổi."
+            : "Select exactly two runs to compare their changes."}
+        </p>
         <div className="historyList">
-          {runs.map((run) => (
+          {isLoading ? (
+            <div className="historyEmptyState loading" role="status">
+              <LoaderCircle size={20} />
+              <strong>{vi ? "Đang tải lịch sử" : "Loading history"}</strong>
+              <span>{vi ? "Đang đọc các lần chạy đã lưu…" : "Reading saved runs…"}</span>
+            </div>
+          ) : runs.length > 0 ? runs.map((run) => (
             <article className="historyItem" key={run.id}>
               <input
+                name={`history-compare-${run.id}`}
                 type="checkbox"
                 checked={selected.includes(run.id)}
                 onChange={() => setSelected((items) => toggleComparisonSelection(items, run.id))}
@@ -170,8 +194,21 @@ export function HistoryPanel({ locale, refreshToken, onOpenRun, onStorageError }
                 <Trash2 size={15} />
               </button>
             </article>
-          ))}
-          {runs.length === 0 && <p className="historyEmpty">{vi ? "Chưa có kết quả phù hợp." : "No matching saved results."}</p>}
+          )) : (
+            <div className="historyEmptyState">
+              <FolderOpen size={22} />
+              <strong>
+                {query.trim()
+                  ? vi ? "Không tìm thấy lần chạy phù hợp" : "No matching runs"
+                  : vi ? "Chưa có lần chạy nào được lưu" : "No saved runs yet"}
+              </strong>
+              <span>
+                {query.trim()
+                  ? vi ? "Thử rút gọn từ khóa tìm kiếm." : "Try a shorter search term."
+                  : vi ? "Kết quả hoàn tất sẽ xuất hiện tại đây." : "Completed results will appear here."}
+              </span>
+            </div>
+          )}
         </div>
       </div>
 
