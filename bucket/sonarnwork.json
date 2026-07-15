@@ -1,0 +1,26 @@
+{
+  "version": "0.1.3",
+  "description": "Guided network diagnostics and security workbench.",
+  "homepage": "https://github.com/Phieu-Tran/SonarNwork",
+  "license": "Unknown",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/Phieu-Tran/SonarNwork/releases/download/v0.1.3/SonarNwork-v0.1.3-windows-x64-portable.zip",
+      "hash": "95c82619c2aa525a78654d2ba8376d97792e688fd2f079d676e6a18a27bb7888",
+      "bin": [
+        "sonar.exe",
+        [
+          "sonarnwork.exe",
+          "sonarnwork"
+        ]
+      ],
+      "shortcuts": [
+        [
+          "sonarnwork-app.exe",
+          "SonarNwork"
+        ]
+      ]
+    }
+  },
+  "notes": "Run 'sonar open ui' to launch the bundled desktop app."
+}

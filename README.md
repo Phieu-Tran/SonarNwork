@@ -103,6 +103,15 @@ shown on the release page.
   The installer downloads the release's SHA-256-verified portable bundle,
   installs the desktop app plus `sonar` and `sonarnwork` under your user profile,
   and adds it to your user `PATH`. Open a new terminal afterward.
+- **Scoop:** after installing Scoop, add the SonarNwork bucket once, then install:
+
+  ```powershell
+  scoop bucket add sonarnwork https://github.com/Phieu-Tran/SonarNwork
+  scoop install sonarnwork
+  ```
+
+  Scoop installs the same portable bundle, including the desktop app and both
+  CLI command names.
 - **Portable bundle (recommended):** download
   `SonarNwork-<version>-windows-x64-portable.zip`, extract it to a permanent
   folder, and add that folder to your user `PATH`. It contains `sonar.exe`, the

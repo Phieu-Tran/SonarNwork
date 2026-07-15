@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.12.0.schema.json
+PackageIdentifier: PhieuTran.SonarNwork
+PackageVersion: 0.1.3
+PackageLocale: en-US
+Publisher: Phieu Tran
+PublisherUrl: https://github.com/Phieu-Tran
+PublisherSupportUrl: https://github.com/Phieu-Tran/SonarNwork/issues
+Author: Phieu Tran
+PackageName: SonarNwork
+PackageUrl: https://github.com/Phieu-Tran/SonarNwork
+License: Unknown
+LicenseUrl: https://github.com/Phieu-Tran/SonarNwork
+Copyright: Copyright (c) 2026 Phieu Tran
+ShortDescription: Guided network diagnostics and security workbench.
+Description: SonarNwork is a desktop and terminal workbench for guided network diagnostics.
+Moniker: sonarnwork
+Tags:
+- network
+- diagnostics
+- security
+- cli
+ReleaseNotes: Adds a bundled Windows bootstrap installer and unified Linux package.
+ReleaseNotesUrl: https://github.com/Phieu-Tran/SonarNwork/releases/tag/v0.1.3
+ManifestType: defaultLocale
+ManifestVersion: 1.12.0
