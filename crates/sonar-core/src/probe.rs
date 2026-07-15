@@ -2484,7 +2484,12 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn linux_ping_uses_a_seconds_timeout() {
-        let invocation = ping_invocation(&PingProfile::new("example.com", 2, 1_500, None));
+        let invocation = ping_invocation(&PingProfile {
+            target: "example.com".into(),
+            count: 2,
+            timeout_ms: 1_500,
+            packet_size: None,
+        });
 
         assert_eq!(invocation.program, "ping");
         assert_eq!(invocation.args, vec!["-c", "2", "-W", "2", "example.com"]);
