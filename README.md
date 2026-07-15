@@ -89,22 +89,69 @@ when older output has been discarded.
 
 For published versions, open
 [GitHub Releases](https://github.com/Phieu-Tran/SonarNwork/releases) and choose
-one of these Windows packages. If the release page is still empty, use the CMD
-source installation below.
+the package for your operating system. In the commands below, replace `0.1.2`
+with the version shown on the release page.
+
+### Windows
 
 - **Portable bundle (recommended):** download
   `SonarNwork-<version>-windows-x64-portable.zip`, extract it to a permanent
   folder, and add that folder to your user `PATH`. It contains `sonar.exe`, the
   compatibility `sonarnwork.exe`, and `sonarnwork-app.exe`, so both the TUI and
   `/open ui` work without extra configuration.
-- **Standalone CLI:** download `sonar.exe`, put it in a folder on `PATH`, then
-  open a new CMD or PowerShell window. To use `/open ui`, also install/download
-  the desktop app or set `SONARNWORK_DESKTOP_PATH` to its executable.
+- **Standalone CLI:** download `SonarNwork-CLI-<version>-windows-x64.exe`, put
+  it in a folder on `PATH` as `sonar.exe`, then open a new CMD or PowerShell
+  window. To use `/open ui`, also install/download the desktop app or set
+  `SONARNWORK_DESKTOP_PATH` to its executable.
 - **Desktop installer:** install the `.msi` or setup `.exe`. A separately
   installed CLI finds the desktop app in the standard SonarNwork locations; use
   `SONARNWORK_DESKTOP_PATH` if you selected a custom directory.
 
-### Install from Command Prompt (CMD)
+### Linux (Debian / Ubuntu)
+
+- **Desktop app:** download and install
+  `SonarNwork-<version>-linux-x64.deb`.
+- **Standalone CLI:** download and install
+  `SonarNwork-CLI-<version>-linux-x64.deb`. It provides both `sonar` and the
+  compatibility `sonarnwork` command.
+
+### Install the prebuilt Windows CLI
+
+Open **Command Prompt** and run this after a release has been published. It
+does not require Rust:
+
+```cmd
+set "VERSION=0.1.2"
+set "SONARNWORK_HOME=%LOCALAPPDATA%\Programs\SonarNwork"
+if not exist "%SONARNWORK_HOME%" mkdir "%SONARNWORK_HOME%"
+curl.exe -fL "https://github.com/Phieu-Tran/SonarNwork/releases/download/v%VERSION%/SonarNwork-CLI-%VERSION%-windows-x64.exe" -o "%SONARNWORK_HOME%\sonar.exe"
+set "PATH=%SONARNWORK_HOME%;%PATH%"
+sonar --version
+```
+
+The `PATH` command applies only to the current CMD window. Add
+`%LOCALAPPDATA%\Programs\SonarNwork` to your user `PATH` to make the command
+available in future terminals.
+
+### Install a Linux `.deb` with `wget`
+
+For the CLI-only package on Debian or Ubuntu:
+
+```bash
+VERSION="0.1.2"
+wget -O sonarnwork-cli.deb "https://github.com/Phieu-Tran/SonarNwork/releases/download/v${VERSION}/SonarNwork-CLI-${VERSION}-linux-x64.deb"
+sudo apt install ./sonarnwork-cli.deb
+sonar --version
+```
+
+For the desktop app, use the same version and replace the package name:
+
+```bash
+wget -O sonarnwork.deb "https://github.com/Phieu-Tran/SonarNwork/releases/download/v${VERSION}/SonarNwork-${VERSION}-linux-x64.deb"
+sudo apt install ./sonarnwork.deb
+```
+
+### Build the CLI from source (Rust required)
 
 With Rust installed, open **Command Prompt** and install both CLI names directly
 from the repository:
@@ -115,21 +162,6 @@ where sonar
 sonar --version
 sonar
 ```
-
-After a GitHub Release has been published, install its prebuilt CLI without a
-Rust toolchain:
-
-```cmd
-set "SONARNWORK_HOME=%LOCALAPPDATA%\Programs\SonarNwork"
-if not exist "%SONARNWORK_HOME%" mkdir "%SONARNWORK_HOME%"
-curl.exe -fL "https://github.com/Phieu-Tran/SonarNwork/releases/latest/download/sonar.exe" -o "%SONARNWORK_HOME%\sonar.exe"
-set "PATH=%SONARNWORK_HOME%;%PATH%"
-sonar --version
-```
-
-The `PATH` command in the prebuilt example applies to the current CMD window.
-Add `%LOCALAPPDATA%\Programs\SonarNwork` to your user `PATH` to make the command
-available in future terminals.
 
 Verify the command from a new terminal:
 
