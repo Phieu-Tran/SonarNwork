@@ -146,6 +146,7 @@ jobs:
           Copy-Item "target/release/sonarnwork.exe" $stage
           Copy-Item "target/release/sonarnwork-app.exe" $stage
           Compress-Archive -Path "$stage/*" -DestinationPath $zip -Force
+          Copy-Item "scripts/install.ps1" "$assets/install.ps1"
 
           Copy-Item `
             "target/release/sonar.exe" `

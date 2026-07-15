@@ -87,13 +87,22 @@ when older output has been discarded.
 
 ## Download and install
 
-For published versions, open
-[GitHub Releases](https://github.com/Phieu-Tran/SonarNwork/releases) and choose
-the package for your operating system. In the commands below, replace `0.1.2`
-with the version shown on the release page.
+For published versions, use the installer for your operating system or open
+[GitHub Releases](https://github.com/Phieu-Tran/SonarNwork/releases) to download
+a package manually. In the Linux command below, replace `0.1.2` with the version
+shown on the release page.
 
 ### Windows
 
+- **One-command install (recommended):** open PowerShell and run:
+
+  ```powershell
+  irm https://github.com/Phieu-Tran/SonarNwork/releases/latest/download/install.ps1 | iex
+  ```
+
+  The installer downloads the release's SHA-256-verified portable bundle,
+  installs the desktop app plus `sonar` and `sonarnwork` under your user profile,
+  and adds it to your user `PATH`. Open a new terminal afterward.
 - **Portable bundle (recommended):** download
   `SonarNwork-<version>-windows-x64-portable.zip`, extract it to a permanent
   folder, and add that folder to your user `PATH`. It contains `sonar.exe`, the
@@ -112,24 +121,6 @@ with the version shown on the release page.
 - Download `SonarNwork-<version>-linux-x64.deb`. This one package installs the
   SonarNwork desktop app, `sonar`, and the compatibility `sonarnwork` command,
   so `sonar open ui` works without a second download.
-
-### Install the prebuilt Windows CLI
-
-Open **Command Prompt** and run this after a release has been published. It
-does not require Rust:
-
-```cmd
-set "VERSION=0.1.2"
-set "SONARNWORK_HOME=%LOCALAPPDATA%\Programs\SonarNwork"
-if not exist "%SONARNWORK_HOME%" mkdir "%SONARNWORK_HOME%"
-curl.exe -fL "https://github.com/Phieu-Tran/SonarNwork/releases/download/v%VERSION%/SonarNwork-CLI-%VERSION%-windows-x64.exe" -o "%SONARNWORK_HOME%\sonar.exe"
-set "PATH=%SONARNWORK_HOME%;%PATH%"
-sonar --version
-```
-
-The `PATH` command applies only to the current CMD window. Add
-`%LOCALAPPDATA%\Programs\SonarNwork` to your user `PATH` to make the command
-available in future terminals.
 
 ### Install a Linux `.deb` with `wget`
 
