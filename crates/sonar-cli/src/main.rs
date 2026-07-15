@@ -26,13 +26,14 @@ use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitCode};
 
 mod tui;
+mod update;
 
 #[derive(Debug, Parser)]
 #[command(name = "sonar")]
 #[command(version)]
 #[command(about = "SonarNwork CLI shell backed by sonar-core")]
 #[command(
-    after_help = "Examples:\n  sonar\n  sonar check example.com\n  sonar ping 1.1.1.1 --count 4 --timeout 1000\n  sonar trace 1.1.1.1 --tcp --port 443\n  sonar scanner run nmap 103.29.26.0/24 --profile version --ports all --yes\n  sonar open ui"
+    after_help = "Examples:\n  sonar\n  sonar check example.com\n  sonar ping 1.1.1.1 --count 4 --timeout 1000\n  sonar trace 1.1.1.1 --tcp --port 443\n  sonar scanner run nmap 103.29.26.0/24 --profile version --ports all --yes\n  sonar update --check\n  sonar open ui"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -103,6 +104,15 @@ enum Command {
     Info {
         #[arg(long)]
         json: bool,
+    },
+    /// Check for or install the latest published SonarNwork version.
+    Update {
+        /// Check for a newer release without installing it.
+        #[arg(long)]
+        check: bool,
+        /// Confirm the update without an interactive prompt.
+        #[arg(long)]
+        yes: bool,
     },
     Entity {
         #[command(subcommand)]
@@ -922,6 +932,11 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                 println!("{}", paint(info.contract, Tone::Muted));
             }
         }
+        Command::Update { check, yes } => {
+            tokio::task::spawn_blocking(move || update::run(check, yes))
+                .await
+                .context("wait for the SonarNwork updater")??;
+        }
         Command::Entity { command } => match command {
             EntityCommand::Parse { target, json } => {
                 let entity = core.parse_entity(&target)?;
@@ -1595,6 +1610,7 @@ fn print_shell_help() {
     println!("  probe run core.describe_entity 1.1.1.1");
     println!("  scanner run nmap 103.29.26.0/24 --profile version --ports all --yes");
     println!("  myip");
+    println!("  update --check");
     println!();
     println!("{}", paint("Command help still works", Tone::Heading));
     println!("  probe --help");

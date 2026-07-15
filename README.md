@@ -169,6 +169,19 @@ same action is also available non-interactively as `sonar open ui`.
 Every release also includes SHA-256 checksums and a CycloneDX SBOM. Managed
 tools such as Nmap and Nuclei remain optional and are never bundled.
 
+### Update SonarNwork
+
+Use the same command on every supported installation to check for a new version:
+
+```powershell
+sonar update --check
+sonar update
+```
+
+`sonar update` asks for confirmation, then uses Scoop, WinGet, Cargo, the
+SHA-256-verified portable updater, or the Debian package flow according to how
+SonarNwork was installed. In the TUI, choose `/update` and confirm the update.
+
 ## Try it
 
 You will need a Rust toolchain, Node.js, `pnpm`, and the system dependencies

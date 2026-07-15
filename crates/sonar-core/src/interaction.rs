@@ -387,6 +387,19 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             capabilities: vec![InteractionCapability::View],
             examples: vec!["/open ui".into()],
         },
+        InteractionNamespace {
+            id: "app-update".into(),
+            trigger: "/update".into(),
+            aliases: vec!["/upgrade".into()],
+            label: "Update SonarNwork".into(),
+            description: "Install the latest published SonarNwork version through the current install channel.".into(),
+            group: InteractionGroup::Tooling,
+            action_class: ActionClass::LocalInspection,
+            requires_scope_confirmation: false,
+            fields: vec![confirmation_field("confirm", "Confirm update")],
+            capabilities: vec![InteractionCapability::Update],
+            examples: vec!["/update".into()],
+        },
         namespace(
             "tool-status",
             "Tool status",
@@ -1009,6 +1022,7 @@ mod tests {
             assert!(catalog.namespace(id).is_some(), "missing namespace {id}");
         }
         assert_eq!(catalog.namespace("open-ui").unwrap().trigger, "/open ui");
+        assert_eq!(catalog.namespace("app-update").unwrap().trigger, "/update");
     }
 
     #[test]

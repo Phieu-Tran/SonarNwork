@@ -31,6 +31,7 @@ enum InputMode {
 #[derive(Debug, PartialEq, Eq)]
 enum TuiAction {
     Run(Vec<String>),
+    SelfUpdate(Vec<String>),
     RefreshStatus(String),
     Install(String),
     Update(String),
@@ -366,6 +367,9 @@ impl TuiState {
 
     fn prepared_action(&mut self) -> Option<TuiAction> {
         match self.prepare_run() {
+            Ok(args) if self.selected_namespace_id.as_deref() == Some("app-update") => {
+                Some(TuiAction::SelfUpdate(args))
+            }
             Ok(args) => Some(TuiAction::Run(args)),
             Err(error) => {
                 self.status = error;
@@ -478,6 +482,10 @@ fn interaction_args(
         ],
         "tools" => vec!["tools".into(), "catalog".into()],
         "open-ui" => vec!["open".into(), "ui".into()],
+        "app-update" => {
+            require_confirmation(value("confirm"))?;
+            vec!["update".into(), "--yes".into()]
+        }
         "tool-status" => vec![
             "tools".into(),
             "status".into(),
@@ -745,6 +753,12 @@ fn run_loop(
                             vec!["tools".into(), "update".into(), tool_id, "--yes".into()],
                             &sender,
                         ),
+                        TuiAction::SelfUpdate(args) => match runner.start(args, sender.clone()) {
+                            Ok(()) => return Ok(()),
+                            Err(error) => {
+                                state.status = format!("Could not start the updater: {error:#}")
+                            }
+                        },
                         TuiAction::Run(args) => {
                             start_operation(&mut runner, &mut state, args, &sender)
                         }
@@ -885,6 +899,19 @@ mod tests {
         assert!(matches!(
             action,
             Some(TuiAction::Run(args)) if args == vec!["open".to_string(), "ui".to_string()]
+        ));
+    }
+
+    #[test]
+    fn app_update_routes_to_a_child_process_before_the_tui_exits() {
+        let mut state = state();
+        select(&mut state, "/update");
+        state.values.insert("confirm".into(), "yes".into());
+
+        assert!(matches!(
+            state.prepared_action(),
+            Some(TuiAction::SelfUpdate(args))
+                if args == vec!["update".to_string(), "--yes".to_string()]
         ));
     }
 

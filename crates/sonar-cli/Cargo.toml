@@ -19,6 +19,8 @@ clap.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+reqwest.workspace = true
+sha2.workspace = true
 sonar-core = { path = "../sonar-core" }
 sonar-report = { path = "../sonar-report" }
 sonar-tools = { path = "../sonar-tools" }

@@ -9,6 +9,9 @@ and versions use [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- `sonar update --check` and `sonar update` for checking and installing a newer
+  SonarNwork release through the current install channel, including the `/update`
+  TUI action.
 - Linux x86_64 runtime support for system network probes and firewall status
   detection through UFW, firewalld, and nftables.
 - Ubuntu 22.04 CI coverage and release artifacts for the desktop and CLI Debian

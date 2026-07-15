@@ -1,3 +1,8 @@
+param(
+    [string] $InstallRoot,
+    [int] $WaitForProcessId = 0
+)
+
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
@@ -54,7 +59,17 @@ try {
     if (-not $env:LOCALAPPDATA) {
         throw "LOCALAPPDATA is unavailable; run this installer from a standard Windows user session."
     }
-    $installRoot = Join-Path $env:LOCALAPPDATA "Programs\SonarNwork"
+    if (-not $InstallRoot) {
+        $InstallRoot = Join-Path $env:LOCALAPPDATA "Programs\SonarNwork"
+    }
+    if ($WaitForProcessId -gt 0) {
+        try {
+            Wait-Process -Id $WaitForProcessId -ErrorAction Stop
+        }
+        catch {
+            # The invoking process already ended before the updater started.
+        }
+    }
 
     $headers = @{ "User-Agent" = "SonarNwork-Installer" }
     $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers

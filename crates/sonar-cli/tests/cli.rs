@@ -145,6 +145,15 @@ fn help_lists_subcommands() {
 }
 
 #[test]
+fn help_lists_self_update_command() {
+    cli()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("update"));
+}
+
+#[test]
 fn sonar_alias_uses_the_same_cli_entrypoint() {
     short_cli()
         .arg("info")
