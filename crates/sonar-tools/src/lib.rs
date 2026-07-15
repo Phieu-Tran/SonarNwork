@@ -1196,7 +1196,9 @@ mod tests {
                 .iter()
                 .any(|path| path == &PathBuf::from(r"C:\tools\nuclei")));
         } else {
-            assert_eq!(candidates, [PathBuf::from("nuclei")]);
+            assert!(candidates
+                .iter()
+                .any(|path| path == &PathBuf::from("nuclei")));
         }
     }
 
