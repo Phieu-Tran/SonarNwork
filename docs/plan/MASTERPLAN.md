@@ -207,6 +207,7 @@ ACCEPTANCE CRITERIA (điều chỉnh theo phạm vi task), tất cả là lệnh
 
 | Ngày | Task | Kết quả | Ghi chú |
 | --- | --- | --- | --- |
+| 2026-07-17 | EPIC A | MERGED | `work/a4-cleanup-docs` merge --no-ff về `main` (2 commit: sản phẩm+docs, orchestrator scaffolding). Xác minh lại trên main: cargo test --workspace 185 passed/4 ignored, working tree sạch. Chưa push remote. |
 | 2026-07-17 | A4 | ✅ PASS | 1 vòng orchestrator; README + docs/design synced, .mcp.json tracked, 30/30 vitest + 1802 modules + 185 workspace tests. |
 | 2026-07-17 | A3 | ✅ PASS | 1 vòng orchestrator; InteractionRisk + bounded profiles implemented, scope_confirmed removed, 185 tests (+2). |
 | 2026-07-17 | A2 | ✅ PASS | 1 vòng orchestrator; 52 sonar-cli tests, workspace 183 tests baseline maintained. |
