@@ -116,8 +116,8 @@ Cột "Mức" = pipeline đề xuất. Cột "Worker" = model ưu tiên khởi �
 
 | ID | Đề (một câu) | Mức | Phụ thuộc | Trạng thái |
 | --- | --- | --- | --- | --- |
-| **B1** | Xác minh installer đầu-cuối trên Windows: build portable bundle, chạy `install.ps1`, kiểm `sonar --version` + `sonar open ui` sau cài (ghi bằng chứng, không phát hành) | Full | A4 | 📋 |
-| **B2** | Xác minh đường `sonar update` cho từng kênh cài (Scoop/WinGet/Cargo/portable): `sonar update --check` trả đúng trạng thái, không tự nâng khi chưa xác nhận | Compact | B1 | ⛔ |
+| **B1** | Xác minh installer đầu-cuối trên Windows: build portable bundle, chạy `install.ps1`, kiểm `sonar --version` + `sonar open ui` sau cài (ghi bằng chứng, không phát hành) | Full | A4 | ✅ |
+| **B2** | Xác minh đường `sonar update` cho từng kênh cài (Scoop/WinGet/Cargo/portable): `sonar update --check` trả đúng trạng thái, không tự nâng khi chưa xác nhận | Compact | B1 | 📋 |
 
 ### EPIC C — Bộ chạy công cụ ngoài (Phase 2) — Full pipeline, cửa bảo mật bắt buộc
 
@@ -207,6 +207,7 @@ ACCEPTANCE CRITERIA (điều chỉnh theo phạm vi task), tất cả là lệnh
 
 | Ngày | Task | Kết quả | Ghi chú |
 | --- | --- | --- | --- |
+| 2026-07-17 | B1 | ✅ PASS | 3 vòng orchestrator. Vòng 1 TRƯỢT (worker chẩn đoán sai, orchestrator tìm đúng gốc rễ: regex `\\s` escape sai trong install.ps1). Vòng 2 BLOCKED đúng cách (tìm thêm bug `$installRoot = $null` ghi đè tham số `-InstallRoot`, worker dừng thay vì cài liều vào path thật). Vòng 3 sửa đúng cả 3 dòng bug nhưng bằng chứng PATH before/after bị thiếu trên đĩa — orchestrator tự chạy lại toàn bộ acceptance criteria độc lập (không qua worker) để xác nhận ĐẠT thật. Không phát hành, không push. |
 | 2026-07-17 | EPIC A | MERGED | `work/a4-cleanup-docs` merge --no-ff về `main` (2 commit: sản phẩm+docs, orchestrator scaffolding). Xác minh lại trên main: cargo test --workspace 185 passed/4 ignored, working tree sạch. Chưa push remote. |
 | 2026-07-17 | A4 | ✅ PASS | 1 vòng orchestrator; README + docs/design synced, .mcp.json tracked, 30/30 vitest + 1802 modules + 185 workspace tests. |
 | 2026-07-17 | A3 | ✅ PASS | 1 vòng orchestrator; InteractionRisk + bounded profiles implemented, scope_confirmed removed, 185 tests (+2). |
