@@ -8,7 +8,6 @@ Set-StrictMode -Version Latest
 
 $repository = "Phieu-Tran/SonarNwork"
 $releaseApi = "https://api.github.com/repos/$repository/releases/latest"
-$installRoot = $null
 $temporaryRoot = $null
 
 function Get-ReleaseAsset {
@@ -86,13 +85,13 @@ try {
     Invoke-WebRequest -Uri $checksums.browser_download_url -Headers $headers -OutFile $checksumsPath
 
     $checksumLine = Get-Content -LiteralPath $checksumsPath | Where-Object {
-        $_ -match ("^([0-9a-fA-F]{64})\\s{2}" + [regex]::Escape($bundle.name) + "$")
+        $_ -match ("^([0-9a-fA-F]{64})\s{2}" + [regex]::Escape($bundle.name) + "$")
     } | Select-Object -First 1
     if (-not $checksumLine) {
         throw "No SHA-256 checksum was published for $($bundle.name)."
     }
 
-    $expectedHash = ($checksumLine -split "\\s+")[0].ToLowerInvariant()
+    $expectedHash = ($checksumLine -split "\s+")[0].ToLowerInvariant()
     $actualHash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -ne $expectedHash) {
         throw "SHA-256 verification failed for $($bundle.name)."
