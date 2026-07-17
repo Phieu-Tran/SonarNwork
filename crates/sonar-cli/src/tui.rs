@@ -1,7 +1,13 @@
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, RecvTimeoutError};
 
-use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::{
+    event::{
+        DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+        KeyModifiers,
+    },
+    execute,
+};
 use ratatui::DefaultTerminal;
 use sonar_core::{
     InteractionCatalog, InteractionField, InteractionFieldKind, InteractionNamespace,
@@ -47,10 +53,10 @@ struct TuiState {
     selected_namespace_id: Option<String>,
     values: BTreeMap<String, String>,
     focused_field: usize,
-    scope_confirmed: bool,
     output: BoundedTranscript,
     output_scroll_from_bottom: usize,
     output_follow_tail: bool,
+    show_welcome: bool,
     status: String,
     running: bool,
 }
@@ -66,21 +72,21 @@ impl TuiState {
             selected_namespace_id: None,
             values: BTreeMap::new(),
             focused_field: 0,
-            scope_confirmed: false,
             output: {
                 let mut output = BoundedTranscript::with_defaults();
                 output.push(
                     TranscriptKind::Status,
-                    "Type / to choose a diagnostic or plugin workflow.",
+                    "Type a Sonar command directly, without the program name.",
                 );
                 output.push(
                     TranscriptKind::Status,
-                    "The highlighted form is previewed here before selection.",
+                    "Use / or Ctrl+P to browse guided workflows and plugin forms.",
                 );
                 output
             },
             output_scroll_from_bottom: 0,
             output_follow_tail: true,
+            show_welcome: true,
             status: "Ready".into(),
             running: false,
         }
@@ -104,23 +110,19 @@ impl TuiState {
     }
 
     fn filtered_indices(&self) -> Vec<usize> {
-        let needle = self
-            .command_input
-            .trim_start_matches('/')
-            .trim()
-            .to_ascii_lowercase();
+        let needle = normalized_palette_query(&self.command_input);
         self.catalog
             .namespaces
             .iter()
             .enumerate()
             .filter(|(_, namespace)| {
                 needle.is_empty()
-                    || namespace.trigger[1..].contains(&needle)
+                    || trigger_text(&namespace.trigger).contains(&needle)
                     || namespace.label.to_ascii_lowercase().contains(&needle)
                     || namespace
                         .aliases
                         .iter()
-                        .any(|alias| alias[1..].contains(&needle))
+                        .any(|alias| trigger_text(alias).contains(&needle))
             })
             .map(|(index, _)| index)
             .collect()
@@ -145,18 +147,20 @@ impl TuiState {
 
     fn focus_count(&self) -> usize {
         self.visible_fields().len()
-            + usize::from(
-                self.selected_namespace()
-                    .is_some_and(|namespace| namespace.requires_scope_confirmation),
-            )
     }
 
     fn open_palette(&mut self) {
+        if self.running {
+            self.status = "Stop the active operation before changing workflows.".into();
+            return;
+        }
         self.mode = InputMode::Palette;
         self.command_input.clear();
-        self.command_input.push('/');
         self.palette_selection = 0;
-        self.status = "Choose a namespace; its form is previewed in the workspace.".into();
+        self.selected_namespace_id = None;
+        self.values.clear();
+        self.focused_field = 0;
+        self.status = "Search workflows by name; / is optional.".into();
     }
 
     fn move_palette(&mut self, delta: isize) {
@@ -171,6 +175,14 @@ impl TuiState {
 
     fn select_palette(&mut self) -> Option<TuiAction> {
         let index = *self.filtered_indices().get(self.palette_selection)?;
+        self.select_namespace(index)
+    }
+
+    fn select_namespace(&mut self, index: usize) -> Option<TuiAction> {
+        if self.running {
+            self.status = "Stop the active operation before changing workflows.".into();
+            return None;
+        }
         let namespace = self.catalog.namespaces.get(index)?.clone();
         self.selected_namespace_id = Some(namespace.id.clone());
         self.values = namespace
@@ -183,9 +195,8 @@ impl TuiState {
                     .map(|value| (field.id.clone(), value.clone()))
             })
             .collect();
-        self.command_input = namespace.trigger.clone();
+        self.command_input = trigger_text(&namespace.trigger).to_string();
         self.focused_field = 0;
-        self.scope_confirmed = false;
         self.mode = InputMode::Form;
         self.clear_output();
         self.push_output(TranscriptKind::Status, namespace.description.clone());
@@ -197,6 +208,58 @@ impl TuiState {
             .id
             .strip_prefix("scanner.")
             .map(|tool_id| TuiAction::RefreshStatus(tool_id.to_string()))
+    }
+
+    fn exact_namespace_index(&self, input: &str) -> Option<usize> {
+        let needle = normalized_palette_query(input);
+        if needle.is_empty() {
+            return None;
+        }
+        self.catalog.namespaces.iter().position(|namespace| {
+            trigger_text(&namespace.trigger) == needle
+                || namespace.label.to_ascii_lowercase() == needle
+                || namespace
+                    .aliases
+                    .iter()
+                    .any(|alias| trigger_text(alias) == needle)
+        })
+    }
+
+    fn cli_preview(&self, namespace: &InteractionNamespace, preview: bool) -> String {
+        let mut values =
+            if !preview && self.selected_namespace_id.as_deref() == Some(namespace.id.as_str()) {
+                self.values.clone()
+            } else {
+                namespace
+                    .fields
+                    .iter()
+                    .filter_map(|field| {
+                        field
+                            .default_value
+                            .as_ref()
+                            .map(|value| (field.id.clone(), value.clone()))
+                    })
+                    .collect()
+            };
+
+        for field in &namespace.fields {
+            if preview && field.id == "confirm" {
+                values.insert(field.id.clone(), "yes".into());
+            } else if field.required
+                && values
+                    .get(&field.id)
+                    .is_none_or(|value| value.trim().is_empty())
+            {
+                values.insert(
+                    field.id.clone(),
+                    format!("<{}>", field.id.replace('_', "-")),
+                );
+            }
+        }
+
+        interaction_args(namespace, &values)
+            .map(|args| format_cli_command(&args))
+            .unwrap_or_else(|_| format!("sonar {}", trigger_text(&namespace.trigger)))
     }
 
     fn move_focus(&mut self, delta: isize) {
@@ -255,25 +318,105 @@ impl TuiState {
         self.focused_field = self.focused_field.min(self.focus_count().saturating_sub(1));
     }
 
-    fn toggle_scope_if_focused(&mut self) -> bool {
-        let Some(namespace) = self.selected_namespace() else {
-            return false;
-        };
-        if namespace.requires_scope_confirmation
-            && self.focused_field == self.visible_fields().len()
-        {
-            self.scope_confirmed = !self.scope_confirmed;
-            true
-        } else {
-            false
-        }
-    }
-
     fn current_tool_id(&self) -> Option<String> {
         self.selected_namespace_id
             .as_deref()
             .and_then(|id| id.strip_prefix("scanner."))
             .map(str::to_string)
+    }
+
+    fn close_form(&mut self) {
+        self.mode = InputMode::Command;
+        self.command_input.clear();
+        self.selected_namespace_id = None;
+        self.values.clear();
+        self.focused_field = 0;
+        self.status = "Type a command, or press / or Ctrl+P for workflows.".into();
+    }
+
+    fn handle_paste(&mut self, text: &str) {
+        let text = single_line_paste(text);
+        if text.is_empty() {
+            return;
+        }
+        match self.mode {
+            InputMode::Command | InputMode::Palette => self.command_input.push_str(&text),
+            InputMode::Form => {
+                for character in text.chars() {
+                    self.edit_current(character);
+                }
+            }
+        }
+        self.palette_selection = 0;
+    }
+
+    fn submit_command(&mut self) -> Option<TuiAction> {
+        if self.running {
+            self.status = "Stop the active operation before starting another command.".into();
+            return None;
+        }
+
+        let line = self.command_input.trim().to_string();
+        let args = match direct_command_args(&line) {
+            Ok(args) => args,
+            Err(error) => {
+                self.status = error;
+                return None;
+            }
+        };
+        if args.len() == 1 {
+            match args[0].to_ascii_lowercase().as_str() {
+                "exit" | "quit" => return Some(TuiAction::Quit),
+                "clear" | "cls" => {
+                    self.clear_output();
+                    self.show_welcome = true;
+                    self.command_input.clear();
+                    self.status = "Console cleared.".into();
+                    return None;
+                }
+                "help" | "?" => {
+                    self.command_input.clear();
+                    return Some(TuiAction::Run(vec!["--help".into()]));
+                }
+                _ => {}
+            }
+        }
+
+        match super::parse_shell_command(&line) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                self.status = "Type a command after the program name.".into();
+                return None;
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+                ) => {}
+            Err(error) => {
+                if let Some(index) = self.exact_namespace_index(&line) {
+                    return self.select_namespace(index);
+                }
+                self.clear_output();
+                self.push_output(
+                    TranscriptKind::Warning,
+                    error.to_string().trim().to_string(),
+                );
+                self.status = "Invalid command. Review the CLI error in the console.".into();
+                return None;
+            }
+        }
+
+        self.command_input.clear();
+        if args
+            .first()
+            .is_some_and(|arg| arg.eq_ignore_ascii_case("update"))
+            && args.iter().any(|arg| arg == "--yes")
+        {
+            Some(TuiAction::SelfUpdate(args))
+        } else {
+            Some(TuiAction::Run(args))
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<TuiAction> {
@@ -287,9 +430,17 @@ impl TuiState {
                 TuiAction::Quit
             });
         }
+        if key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('p') | KeyCode::Char('P'))
+        {
+            self.open_palette();
+            return None;
+        }
         match key.code {
             KeyCode::F(10) => return Some(TuiAction::Quit),
-            KeyCode::F(2) => return self.current_tool_id().map(TuiAction::RefreshStatus),
+            KeyCode::F(2) if !self.running => {
+                return self.current_tool_id().map(TuiAction::RefreshStatus)
+            }
             KeyCode::F(3) if !self.running => {
                 return self.current_tool_id().map(TuiAction::Install)
             }
@@ -320,45 +471,78 @@ impl TuiState {
 
         match self.mode {
             InputMode::Command => match key.code {
-                KeyCode::Char('/') => self.open_palette(),
-                KeyCode::Esc => self.command_input.clear(),
-                _ => self.status = "Type / to open the command palette (F10 exits).".into(),
+                KeyCode::Char('/')
+                    if self.command_input.is_empty()
+                        && !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.open_palette()
+                }
+                KeyCode::Enter => return self.submit_command(),
+                KeyCode::Backspace => {
+                    self.command_input.pop();
+                }
+                KeyCode::Esc => {
+                    self.command_input.clear();
+                    self.status = "Command cleared.".into();
+                }
+                KeyCode::Tab => {
+                    if self.running {
+                        self.status = "Stop the active operation before changing workflows.".into();
+                    } else {
+                        self.mode = InputMode::Palette;
+                        self.palette_selection = 0;
+                        self.status = "Search workflows by name; Enter opens the form.".into();
+                    }
+                }
+                KeyCode::Char(character)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.command_input.push(character);
+                }
+                _ => {}
             },
             InputMode::Palette => match key.code {
                 KeyCode::Esc => {
                     self.mode = InputMode::Command;
                     self.command_input.clear();
-                    self.status = "Palette closed.".into();
+                    self.status = "Workflow browser closed; direct command input is active.".into();
                 }
-                KeyCode::Down | KeyCode::Char('j') => self.move_palette(1),
-                KeyCode::Up | KeyCode::Char('k') => self.move_palette(-1),
-                KeyCode::Enter => return self.select_palette(),
+                KeyCode::Down => self.move_palette(1),
+                KeyCode::Up => self.move_palette(-1),
+                KeyCode::Enter | KeyCode::Tab => return self.select_palette(),
                 KeyCode::Backspace => {
-                    if self.command_input.len() > 1 {
-                        self.command_input.pop();
-                    }
+                    self.command_input.pop();
                     self.palette_selection = 0;
                 }
-                KeyCode::Char(character) => {
+                KeyCode::Char(character)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
                     self.command_input.push(character);
                     self.palette_selection = 0;
                 }
                 _ => {}
             },
             InputMode::Form => match key.code {
-                KeyCode::Esc => {
-                    self.mode = InputMode::Command;
-                    self.command_input.clear();
-                    self.status = "Type / to switch workflow.".into();
-                }
+                KeyCode::Esc => self.close_form(),
                 KeyCode::Tab => self.move_focus(1),
                 KeyCode::BackTab => self.move_focus(-1),
                 KeyCode::Left => self.cycle_choice(-1),
                 KeyCode::Right => self.cycle_choice(1),
-                KeyCode::Char(' ') if self.toggle_scope_if_focused() => {}
                 KeyCode::Backspace => self.backspace_current(),
                 KeyCode::Enter if !self.running => return self.prepared_action(),
-                KeyCode::Char(character) => self.edit_current(character),
+                KeyCode::Char(character)
+                    if !key
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    self.edit_current(character)
+                }
                 _ => {}
             },
         }
@@ -392,9 +576,6 @@ impl TuiState {
                 return Err(format!("{} is required", field.label));
             }
         }
-        if namespace.requires_scope_confirmation && !self.scope_confirmed {
-            return Err("confirm that you own or are authorized for this target".into());
-        }
         interaction_args(namespace, &self.values)
     }
 
@@ -404,6 +585,7 @@ impl TuiState {
     }
 
     fn push_output(&mut self, kind: TranscriptKind, line: impl Into<String>) {
+        self.show_welcome = false;
         self.output.push(kind, line);
         if !self.output_follow_tail {
             self.output_scroll_from_bottom = self.output_scroll_from_bottom.saturating_add(1);
@@ -429,6 +611,93 @@ impl TuiState {
         self.output_scroll_from_bottom = 0;
         self.output_follow_tail = true;
     }
+}
+
+fn trigger_text(trigger: &str) -> String {
+    trigger.trim_start_matches('/').to_ascii_lowercase()
+}
+
+fn normalized_palette_query(input: &str) -> String {
+    let query = input
+        .trim()
+        .trim_start_matches('/')
+        .trim()
+        .to_ascii_lowercase();
+    query
+        .strip_prefix("sonarnwork ")
+        .or_else(|| query.strip_prefix("sonar "))
+        .unwrap_or(&query)
+        .trim()
+        .to_string()
+}
+
+fn direct_command_args(input: &str) -> Result<Vec<String>, String> {
+    let mut args = super::split_shell_line(input)?;
+    if args.first().is_some_and(|arg| {
+        arg.eq_ignore_ascii_case("sonar") || arg.eq_ignore_ascii_case("sonarnwork")
+    }) {
+        args.remove(0);
+    }
+    if args.is_empty() {
+        Err("Type a command, for example: ping 1.1.1.1".into())
+    } else {
+        Ok(args)
+    }
+}
+
+fn single_line_paste(text: &str) -> String {
+    text.chars()
+        .filter_map(|character| match character {
+            '\r' | '\n' | '\t' => Some(' '),
+            character if character.is_control() => None,
+            character => Some(character),
+        })
+        .collect()
+}
+
+fn format_cli_command(args: &[String]) -> String {
+    std::iter::once("sonar".to_string())
+        .chain(args.iter().map(|arg| format_cli_arg(arg)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_cli_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && !arg
+            .chars()
+            .any(|character| character.is_whitespace() || matches!(character, '\'' | '"'))
+    {
+        return arg.to_string();
+    }
+
+    let mut escaped = String::with_capacity(arg.len() + 2);
+    escaped.push('"');
+    let mut pending_backslashes = 0usize;
+    for character in arg.chars() {
+        match character {
+            '\\' => pending_backslashes += 1,
+            '"' => {
+                for _ in 0..(pending_backslashes * 2 + 1) {
+                    escaped.push('\\');
+                }
+                pending_backslashes = 0;
+                escaped.push('"');
+            }
+            character => {
+                for _ in 0..pending_backslashes {
+                    escaped.push('\\');
+                }
+                pending_backslashes = 0;
+                escaped.push(character);
+            }
+        }
+    }
+    for _ in 0..(pending_backslashes * 2) {
+        escaped.push('\\');
+    }
+    escaped.push('"');
+    escaped
 }
 
 fn interaction_args(
@@ -527,7 +796,6 @@ fn interaction_args(
                 required(value("target"), "target")?,
             ];
             push_option(&mut args, "--location", value("location"));
-            args.push("--yes".into());
             args
         }
         "remote-port" => {
@@ -537,7 +805,6 @@ fn interaction_args(
                 required(value("target"), "target")?,
             ];
             push_option(&mut args, "--port", value("port"));
-            args.push("--yes".into());
             args
         }
         "capture" => {
@@ -545,7 +812,6 @@ fn interaction_args(
             push_option(&mut args, "--interface", value("interface_id"));
             push_option(&mut args, "--duration", value("duration_seconds"));
             push_option(&mut args, "--packets", value("packet_limit"));
-            args.push("--yes".into());
             args
         }
         "capture-status" => vec!["capture".into(), "status".into()],
@@ -565,7 +831,6 @@ fn interaction_args(
             push_option(&mut args, "--interval", value("interval_seconds"));
             push_option(&mut args, "--latency", value("latency_alert_ms"));
             push_option(&mut args, "--loss", value("loss_alert_percent"));
-            args.push("--yes".into());
             args
         }
         "monitor-list" => vec!["monitor".into(), "list".into()],
@@ -619,7 +884,6 @@ fn interaction_args(
                 };
                 args.extend(["--ports".into(), ports]);
             }
-            args.push("--yes".into());
             args
         }
         _ => {
@@ -671,6 +935,7 @@ struct TerminalGuard;
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
+        let _ = execute!(std::io::stdout(), DisableBracketedPaste);
         ratatui::restore();
     }
 }
@@ -688,6 +953,7 @@ pub fn run() -> anyhow::Result<()> {
     }
     let mut terminal = ratatui::init();
     let _guard = TerminalGuard;
+    execute!(std::io::stdout(), EnableBracketedPaste)?;
     run_loop(&mut terminal, state, operations)
 }
 
@@ -765,6 +1031,7 @@ fn run_loop(
                     }
                 }
             }
+            UiEvent::Terminal(Event::Paste(text)) => state.handle_paste(&text),
             UiEvent::Terminal(_) => {}
             UiEvent::TerminalError(error) => {
                 anyhow::bail!("terminal input failed: {error}");
@@ -790,13 +1057,11 @@ fn start_operation(
     args: Vec<String>,
     sender: &mpsc::Sender<UiEvent>,
 ) {
-    state.clear_output();
-    state.push_output(
-        TranscriptKind::Command,
-        format!("sonarnwork {}", args.join(" ")),
-    );
+    let command = format_cli_command(&args);
     match runner.start(args, sender.clone()) {
         Ok(()) => {
+            state.clear_output();
+            state.push_output(TranscriptKind::Command, command);
             state.running = true;
             state.status = "Running… F6 or Ctrl+C cancels.".into();
         }
@@ -870,6 +1135,149 @@ mod tests {
         state.handle_key(key(KeyCode::Enter));
     }
 
+    fn submit(state: &mut TuiState, command: &str) -> Option<TuiAction> {
+        for character in command.chars() {
+            state.handle_key(key(KeyCode::Char(character)));
+        }
+        state.handle_key(key(KeyCode::Enter))
+    }
+
+    #[test]
+    fn direct_cli_commands_run_without_slash_or_program_name() {
+        let mut state = state();
+        let action = submit(&mut state, "ping 1.1.1.1 --count 2");
+
+        assert!(matches!(
+            action,
+            Some(TuiAction::Run(args))
+                if args == ["ping", "1.1.1.1", "--count", "2"]
+        ));
+        assert!(state.command_input.is_empty());
+    }
+
+    #[test]
+    fn direct_cli_accepts_program_prefix_urls_paste_and_windows_paths() {
+        let mut direct = state();
+        let action = submit(&mut direct, "sonar check https://example.com/a/b");
+        assert!(matches!(
+            action,
+            Some(TuiAction::Run(args))
+                if args == ["check", "https://example.com/a/b"]
+        ));
+
+        let args = direct_command_args(
+            r#"sonarnwork capture open "C:\Program Files\SonarNwork\trace.pcapng""#,
+        )
+        .unwrap();
+        assert_eq!(
+            args,
+            [
+                "capture",
+                "open",
+                r"C:\Program Files\SonarNwork\trace.pcapng"
+            ]
+        );
+        assert_eq!(
+            format_cli_command(&args),
+            r#"sonar capture open "C:\Program Files\SonarNwork\trace.pcapng""#
+        );
+        for argument in ["", r"C:\Temp Folder\", r#"C:\Temp\say "hello".txt"#] {
+            let rendered = format_cli_arg(argument);
+            assert_eq!(
+                super::super::split_shell_line(&rendered).unwrap(),
+                [argument],
+                "failed to round-trip {rendered}"
+            );
+        }
+
+        let mut pasted = state();
+        pasted.handle_paste("ping 1.1.1.1\r\n--count 2");
+        assert!(matches!(
+            pasted.handle_key(key(KeyCode::Enter)),
+            Some(TuiAction::Run(args)) if args == ["ping", "1.1.1.1", "--count", "2"]
+        ));
+    }
+
+    #[test]
+    fn bare_workflow_names_and_palette_shortcuts_open_forms() {
+        let mut direct = state();
+        let action = submit(&mut direct, "nmap");
+        assert_eq!(direct.mode, InputMode::Form);
+        assert_eq!(
+            direct.selected_namespace_id.as_deref(),
+            Some("scanner.nmap")
+        );
+        assert!(matches!(action, Some(TuiAction::RefreshStatus(tool)) if tool == "nmap"));
+
+        let mut shortcut = state();
+        shortcut.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(shortcut.mode, InputMode::Palette);
+        assert!(shortcut.command_input.is_empty());
+    }
+
+    #[test]
+    fn direct_update_with_confirmation_uses_the_self_update_path() {
+        let mut state = state();
+        assert!(matches!(
+            submit(&mut state, "update --yes"),
+            Some(TuiAction::SelfUpdate(args)) if args == ["update", "--yes"]
+        ));
+    }
+
+    #[test]
+    fn an_active_run_blocks_workflow_switching_and_status_refresh() {
+        let mut direct = state();
+        direct.clear_output();
+        direct.push_output(TranscriptKind::Stdout, "active output");
+        direct.running = true;
+
+        direct.handle_key(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(direct.mode, InputMode::Command);
+        direct.handle_key(key(KeyCode::Char('/')));
+        assert_eq!(direct.mode, InputMode::Command);
+        direct.handle_key(key(KeyCode::Tab));
+        assert_eq!(direct.mode, InputMode::Command);
+        assert!(direct
+            .output
+            .iter()
+            .any(|entry| entry.text == "active output"));
+
+        let mut scanner = state();
+        select(&mut scanner, "/nmap");
+        scanner.push_output(TranscriptKind::Stdout, "scanner output");
+        scanner.running = true;
+        assert_eq!(scanner.handle_key(key(KeyCode::F(2))), None);
+        assert!(scanner
+            .output
+            .iter()
+            .any(|entry| entry.text == "scanner output"));
+    }
+
+    #[test]
+    fn target_workflow_preview_and_run_need_no_confirmation() {
+        let mut state = state();
+        select(&mut state, "/nmap");
+        state.values.insert("target".into(), "192.168.1.10".into());
+        let preview = state.cli_preview(state.selected_namespace().unwrap(), false);
+        assert!(!preview.contains("--yes"));
+
+        let args = state.prepare_run().unwrap();
+        assert!(!args.iter().any(|arg| arg == "--yes"));
+    }
+
+    #[test]
+    fn leaving_a_form_keeps_the_existing_console_visible() {
+        let mut state = state();
+        select(&mut state, "/ping");
+        state.push_output(TranscriptKind::Stdout, "previous result");
+
+        state.handle_key(key(KeyCode::Esc));
+
+        assert_eq!(state.mode, InputMode::Command);
+        assert!(!state.show_welcome);
+        assert!(render_to_string(&state, 80, 24).contains("previous result"));
+    }
+
     #[test]
     fn slash_filters_and_selects_a_contextual_plugin_form() {
         let mut state = state();
@@ -926,7 +1334,6 @@ mod tests {
             .values
             .insert("profile".into(), "nmap_service_deep".into());
         state.values.insert("ports".into(), "all".into());
-        state.scope_confirmed = true;
 
         let args = state.prepare_run().unwrap();
 
@@ -935,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn nuclei_form_requires_authorization_and_has_no_ports() {
+    fn nuclei_form_runs_directly_and_has_no_ports() {
         let mut state = state();
         select(&mut state, "/nuclei");
         state
@@ -946,7 +1353,11 @@ mod tests {
             .visible_fields()
             .iter()
             .any(|field| field.id == "ports"));
-        assert!(state.prepare_run().unwrap_err().contains("authorized"));
+        assert!(!state
+            .prepare_run()
+            .unwrap()
+            .iter()
+            .any(|arg| arg == "--yes"));
     }
 
     #[test]
@@ -966,7 +1377,18 @@ mod tests {
 
         assert!(rendered.contains("Nmap"));
         assert!(rendered.contains("Scan profile"));
-        assert!(rendered.contains("Selected namespace"));
+        assert!(rendered.contains("Selected workflow"));
+        assert!(rendered.contains("sonar scanner run nmap"));
+    }
+
+    #[test]
+    fn compact_form_scrolls_the_focused_field_into_view() {
+        let mut state = state();
+        select(&mut state, "/nmap");
+        state.focused_field = state.focus_count() - 1;
+
+        let rendered = render_to_string(&state, 80, 24);
+        assert!(rendered.contains("Ports"));
     }
 
     #[test]
@@ -974,7 +1396,7 @@ mod tests {
         let mut state = state();
         select(&mut state, "/nmap");
         state.clear_output();
-        state.push_output(TranscriptKind::Command, "sonarnwork scanner run nmap");
+        state.push_output(TranscriptKind::Command, "sonar scanner run nmap");
         state.push_output(TranscriptKind::Stderr, "permission denied");
 
         for (width, height) in [(60, 20), (80, 24), (120, 40)] {
@@ -984,11 +1406,11 @@ mod tests {
                 "missing header at {width}x{height}"
             );
             assert!(
-                rendered.contains("Nmap"),
-                "missing form at {width}x{height}"
+                rendered.to_ascii_lowercase().contains("nmap"),
+                "missing form at {width}x{height}:\n{rendered}"
             );
             assert!(
-                rendered.contains("Output / status"),
+                rendered.contains("Console output"),
                 "missing transcript pane at {width}x{height}"
             );
             assert!(
@@ -996,6 +1418,14 @@ mod tests {
                 "missing stderr tail at {width}x{height}"
             );
         }
+    }
+
+    #[test]
+    fn welcome_renderer_reuses_the_colored_cli_identity() {
+        let rendered = render_to_string(&state(), 100, 28);
+        assert!(rendered.contains("____   ___"));
+        assert!(rendered.contains("Interactive CLI console"));
+        assert!(rendered.contains("ping 1.1.1.1"));
     }
 
     #[test]

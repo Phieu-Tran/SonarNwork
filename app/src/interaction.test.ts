@@ -20,14 +20,13 @@ function scanner(
     description: `${toolId} scanner`,
     group: "scanner",
     action_class: "active_scan",
-    requires_scope_confirmation: true,
     capabilities: ["status", "preview", "run", "stop"],
     examples: [],
     fields: [
       {
         id: "target",
         label: "Target",
-        help: "Scoped target",
+        help: "Target accepted by the scanner",
         kind: "target",
         required: true,
         choices: [],
@@ -59,7 +58,7 @@ function scanner(
 }
 
 const catalog: InteractionCatalog = {
-  schema_version: 1,
+  schema_version: 2,
   namespaces: [
     scanner("nmap", [
       ["nmap_top_ports", "Top ports"],

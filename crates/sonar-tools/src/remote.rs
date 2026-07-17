@@ -46,7 +46,6 @@ pub struct GlobalpingMeasurementRequest {
     pub target: String,
     pub location: String,
     pub limit: u8,
-    pub scope_confirmed: bool,
     pub token: Option<String>,
 }
 
@@ -75,7 +74,6 @@ pub struct RemotePortCheckRequest {
     pub target: String,
     pub port: u16,
     pub max_nodes: u8,
-    pub scope_confirmed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -123,11 +121,6 @@ impl RemoteProviderClient {
         &self,
         request: GlobalpingMeasurementRequest,
     ) -> Result<GlobalpingMeasurementResult> {
-        if !request.scope_confirmed {
-            return Err(ToolError::Operation(
-                "remote measurement requires explicit target authorization".into(),
-            ));
-        }
         let limit = request.limit.clamp(1, MAX_REMOTE_RESULTS as u8);
         let (target, options) = globalping_target_and_options(request.kind, &request.target)?;
         validate_public_host(&target)?;
@@ -193,11 +186,6 @@ impl RemoteProviderClient {
         &self,
         request: RemotePortCheckRequest,
     ) -> Result<RemotePortCheckResult> {
-        if !request.scope_confirmed {
-            return Err(ToolError::Operation(
-                "remote port check requires explicit target authorization".into(),
-            ));
-        }
         let host = normalize_host(&request.target)?;
         validate_public_host(&host)?;
         let max_nodes = request.max_nodes.clamp(1, MAX_REMOTE_RESULTS as u8);
@@ -658,7 +646,6 @@ mod tests {
                 target: "example.com".into(),
                 location: "world".into(),
                 limit: 1,
-                scope_confirmed: true,
                 token: None,
             })
             .unwrap();
@@ -675,7 +662,6 @@ mod tests {
                 target: "example.com".into(),
                 port: 443,
                 max_nodes: 1,
-                scope_confirmed: true,
             })
             .unwrap();
         assert!(!result.id.is_empty());

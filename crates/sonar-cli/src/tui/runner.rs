@@ -52,6 +52,7 @@ impl ProcessRunner {
         let mut child = Command::new(executable)
             .args(args)
             .env("SONARNWORK_TUI", "0")
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()

@@ -8,6 +8,9 @@ moves to another primary view.
   hierarchy; extended documentation is secondary.
 - Planned or unavailable actions remain understandable through copy and
   `aria-disabled`, even when the card is still selectable for explanation.
-- Preserve tool-specific safety confirmations and command previews.
+- Preserve tool-specific risk labels, bounded profiles, and command previews;
+  target actions run directly once their required input is valid. Bounded
+  profiles allow users to select appropriate scanning depth without needing
+  to manually confirm every stage of high-risk operations.
 - At compact widths the package rail becomes an icon rail with accessible names
   so the task panel retains most of the window.

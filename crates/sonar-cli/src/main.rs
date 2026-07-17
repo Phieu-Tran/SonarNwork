@@ -33,7 +33,7 @@ mod update;
 #[command(version)]
 #[command(about = "SonarNwork CLI shell backed by sonar-core")]
 #[command(
-    after_help = "Examples:\n  sonar\n  sonar check example.com\n  sonar ping 1.1.1.1 --count 4 --timeout 1000\n  sonar trace 1.1.1.1 --tcp --port 443\n  sonar scanner run nmap 103.29.26.0/24 --profile version --ports all --yes\n  sonar update --check\n  sonar open ui"
+    after_help = "Examples:\n  sonar\n  sonar check example.com\n  sonar ping 1.1.1.1 --count 4 --timeout 1000\n  sonar trace 1.1.1.1 --tcp --port 443\n  sonar scanner run nmap 103.29.26.0/24 --profile version --ports all\n  sonar update --check\n  sonar open ui"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -220,9 +220,6 @@ enum ScannerCommand {
         profile: Option<ScannerProfileArg>,
         #[arg(long)]
         ports: Option<String>,
-        /// Confirm that you own or are authorized to scan this target.
-        #[arg(long, alias = "i-am-authorized")]
-        yes: bool,
         #[command(flatten)]
         output: OutputOptions,
     },
@@ -327,8 +324,6 @@ enum RemoteCommand {
         #[arg(long)]
         token: Option<String>,
         #[arg(long)]
-        yes: bool,
-        #[arg(long)]
         json: bool,
     },
     Port {
@@ -337,8 +332,6 @@ enum RemoteCommand {
         port: u16,
         #[arg(long, default_value_t = 3)]
         nodes: u8,
-        #[arg(long)]
-        yes: bool,
         #[arg(long)]
         json: bool,
     },
@@ -383,8 +376,6 @@ enum CaptureCommand {
         #[arg(long, default_value_t = 5_000)]
         packets: u64,
         #[arg(long)]
-        yes: bool,
-        #[arg(long)]
         json: bool,
     },
     Open {
@@ -402,8 +393,6 @@ enum MonitorCommand {
         latency: u64,
         #[arg(long, default_value_t = 20)]
         loss: u8,
-        #[arg(long)]
-        yes: bool,
         #[arg(long)]
         json: bool,
     },
@@ -492,8 +481,14 @@ enum OutputMode {
 const EXIT_UNHEALTHY: u8 = 1;
 const EXIT_USAGE: u8 = 2;
 const EXIT_DEPENDENCY_UNAVAILABLE: u8 = 3;
-const EXIT_SCOPE_DENIED: u8 = 4;
+const EXIT_CONFIRMATION_REQUIRED: u8 = 4;
 const EXIT_OPERATION_FAILED: u8 = 5;
+
+const CLI_BANNER: &str = r#"  ____   ___  _   _    _    ____  _   ___        _____  ____  _  __
+ / ___| / _ \| \ | |  / \  |  _ \| \ | \ \      / / _ \|  _ \| |/ /
+ \___ \| | | |  \| | / _ \ | |_) |  \| |\ \ /\ / / | | | |_) | ' /
+  ___) | |_| | |\  |/ ___ \|  _ <| |\  | \ V  V /| |_| |  _ <| . \
+ |____/ \___/|_| \_/_/   \_\_| \_\_| \_|  \_/\_/  \___/|_| \_\_|\_\"#;
 
 #[derive(Debug)]
 struct CliExitError {
@@ -656,18 +651,11 @@ fn exit_code_for_error(error: &anyhow::Error) -> u8 {
     .any(|marker| message.contains(marker))
     {
         EXIT_DEPENDENCY_UNAVAILABLE
-    } else if [
-        "scope denied",
-        "authorized",
-        "authorization",
-        "requires --yes",
-        "confirm that you own",
-        "confirm this explicit",
-    ]
-    .iter()
-    .any(|marker| message.contains(marker))
+    } else if ["scope denied", "requires --yes", "confirm this explicit"]
+        .iter()
+        .any(|marker| message.contains(marker))
     {
-        EXIT_SCOPE_DENIED
+        EXIT_CONFIRMATION_REQUIRED
     } else if [
         "invalid target",
         "invalid value",
@@ -1012,10 +1000,9 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                 target,
                 profile,
                 ports,
-                yes,
                 output,
             } => {
-                run_scanner_command(tool.into(), profile, ports, target, yes, output)?;
+                run_scanner_command(tool.into(), profile, ports, target, output)?;
             }
         },
         Command::Tools { command } => match command {
@@ -1087,7 +1074,6 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                     location,
                     limit,
                     token,
-                    yes,
                     json,
                 } => {
                     let result = client.run_globalping(GlobalpingMeasurementRequest {
@@ -1095,7 +1081,6 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                         target,
                         location,
                         limit,
-                        scope_confirmed: yes,
                         token: token.or_else(|| std::env::var("GLOBALPING_TOKEN").ok()),
                     })?;
                     if json {
@@ -1113,14 +1098,12 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                     target,
                     port,
                     nodes,
-                    yes,
                     json,
                 } => {
                     let result = client.run_remote_port_check(RemotePortCheckRequest {
                         target,
                         port,
                         max_nodes: nodes,
-                        scope_confirmed: yes,
                     })?;
                     if json {
                         print_json(&result)?;
@@ -1174,14 +1157,12 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                     interface,
                     duration,
                     packets,
-                    yes,
                     json,
                 } => {
                     let result = cli_operation(service.capture_packets(CaptureRequest {
                         interface_id: interface,
                         duration_seconds: duration,
                         packet_limit: packets,
-                        scope_confirmed: yes,
                     }))?;
                     if json {
                         print_json(&result)?;
@@ -1230,7 +1211,6 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                     interval,
                     latency,
                     loss,
-                    yes,
                     json,
                 } => {
                     let config = cli_operation(service.start_monitor(StartMonitorRequest {
@@ -1238,7 +1218,6 @@ async fn run_command(command: Command, core: &AppCore) -> anyhow::Result<()> {
                         interval_seconds: interval,
                         latency_alert_ms: latency,
                         loss_alert_percent: loss,
-                        scope_confirmed: yes,
                     }))?;
                     if json {
                         print_json(&config)?;
@@ -1511,30 +1490,57 @@ fn parse_shell_command(line: &str) -> Result<Option<Command>, clap::Error> {
 fn split_shell_line(line: &str) -> Result<Vec<String>, String> {
     let mut args = Vec::new();
     let mut current = String::new();
-    let mut chars = line.chars();
+    let mut chars = line.chars().peekable();
     let mut quote: Option<char> = None;
+    let mut token_started = false;
 
     while let Some(ch) = chars.next() {
         match ch {
             '\\' => {
-                if let Some(next) = chars.next() {
-                    current.push(next);
-                } else {
-                    current.push(ch);
+                let mut backslashes = 1;
+                while chars.peek() == Some(&'\\') {
+                    chars.next();
+                    backslashes += 1;
                 }
+
+                let matching_quote = chars.peek().copied().filter(|next| {
+                    matches!(next, '\'' | '"') && (quote.is_none() || quote == Some(*next))
+                });
+                if let Some(next_quote) = matching_quote {
+                    current.extend(std::iter::repeat_n('\\', backslashes / 2));
+                    chars.next();
+                    if backslashes % 2 == 0 {
+                        quote = if quote == Some(next_quote) {
+                            None
+                        } else {
+                            Some(next_quote)
+                        };
+                    } else {
+                        current.push(next_quote);
+                    }
+                } else {
+                    current.extend(std::iter::repeat_n('\\', backslashes));
+                }
+                token_started = true;
             }
             '\'' | '"' if quote == Some(ch) => {
                 quote = None;
+                token_started = true;
             }
             '\'' | '"' if quote.is_none() => {
                 quote = Some(ch);
+                token_started = true;
             }
             ch if ch.is_whitespace() && quote.is_none() => {
-                if !current.is_empty() {
+                if token_started {
                     args.push(std::mem::take(&mut current));
+                    token_started = false;
                 }
             }
-            _ => current.push(ch),
+            _ => {
+                current.push(ch);
+                token_started = true;
+            }
         }
     }
 
@@ -1542,29 +1548,63 @@ fn split_shell_line(line: &str) -> Result<Vec<String>, String> {
         return Err(format!("unterminated {open_quote} quote"));
     }
 
-    if !current.is_empty() {
+    if token_started {
         args.push(current);
     }
 
     Ok(args)
 }
 
+#[cfg(test)]
+mod shell_input_tests {
+    use super::split_shell_line;
+
+    #[test]
+    fn preserves_windows_paths() {
+        assert_eq!(
+            split_shell_line(r"capture open C:\Temp\trace.pcapng").unwrap(),
+            ["capture", "open", r"C:\Temp\trace.pcapng"]
+        );
+        assert_eq!(
+            split_shell_line(r#"capture open "C:\Program Files\SonarNwork\trace.pcapng""#).unwrap(),
+            [
+                "capture",
+                "open",
+                r"C:\Program Files\SonarNwork\trace.pcapng"
+            ]
+        );
+        assert_eq!(
+            split_shell_line(r#"capture open "\\server\captures\trace.pcapng""#).unwrap(),
+            ["capture", "open", r"\\server\captures\trace.pcapng"]
+        );
+    }
+
+    #[test]
+    fn supports_quoted_arguments_and_rejects_unclosed_quotes() {
+        assert_eq!(
+            split_shell_line(r#"ping "host name" --count 2"#).unwrap(),
+            ["ping", "host name", "--count", "2"]
+        );
+        assert_eq!(
+            split_shell_line(r#"check "a\"b""#).unwrap(),
+            ["check", "a\"b"]
+        );
+        assert_eq!(
+            split_shell_line(r#"check "" tail"#).unwrap(),
+            ["check", "", "tail"]
+        );
+        assert_eq!(
+            split_shell_line(r#"capture open "C:\Temp Folder\\""#).unwrap(),
+            ["capture", "open", "C:\\Temp Folder\\"]
+        );
+        assert!(split_shell_line(r#"ping "unfinished"#).is_err());
+    }
+}
+
 fn print_shell_banner(core: &AppCore) {
     let info = core.app_info();
 
-    println!(
-        "{}",
-        paint(
-            r#"
-  ____   ___  _   _    _    ____  _   ___        _____  ____  _  __
- / ___| / _ \| \ | |  / \  |  _ \| \ | \ \      / / _ \|  _ \| |/ /
- \___ \| | | |  \| | / _ \ | |_) |  \| |\ \ /\ / / | | | |_) | ' /
-  ___) | |_| | |\  |/ ___ \|  _ <| |\  | \ V  V /| |_| |  _ <| . \
- |____/ \___/|_| \_/_/   \_\_| \_\_| \_|  \_/\_/  \___/|_| \_\_|\_\
-"#,
-            Tone::Brand
-        )
-    );
+    println!("\n{}\n", paint(CLI_BANNER, Tone::Brand));
     println!(
         "{}  {}",
         paint("SonarNwork CLI Shell", Tone::Heading),
@@ -1608,7 +1648,7 @@ fn print_shell_help() {
     println!("  dns example.com --record A");
     println!("  probe list");
     println!("  probe run core.describe_entity 1.1.1.1");
-    println!("  scanner run nmap 103.29.26.0/24 --profile version --ports all --yes");
+    println!("  scanner run nmap 103.29.26.0/24 --profile version --ports all");
     println!("  myip");
     println!("  update --check");
     println!();
@@ -1638,14 +1678,8 @@ fn run_scanner_command(
     profile: Option<ScannerProfileArg>,
     ports: Option<String>,
     target: String,
-    yes: bool,
     output_options: OutputOptions,
 ) -> anyhow::Result<()> {
-    anyhow::ensure!(
-        yes,
-        "confirm that you own or are authorized to scan this target with --yes"
-    );
-
     let tool_id = kind.tool_id();
     let mode = scanner_profile_for_tool(kind, profile)?;
     let port_spec = scanner_ports_for_tool(kind, ports)?;
@@ -2008,7 +2042,7 @@ fn print_guide() {
     println!("  sonarnwork trace 1.1.1.1 --tcp --port 443");
     println!("  sonarnwork dns example.com --record A");
     println!("  sonarnwork port 127.0.0.1 --port 443");
-    println!("  sonarnwork scanner run nmap 103.29.26.0/24 --profile version --ports all --yes");
+    println!("  sonarnwork scanner run nmap 103.29.26.0/24 --profile version --ports all");
     println!("  sonarnwork myip");
     println!();
     println!("{}", paint("Output modes", Tone::Brand));

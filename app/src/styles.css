@@ -1182,13 +1182,6 @@ summary:focus-visible {
   grid-column: 2 / span 2;
 }
 
-.remoteScopeConfirmation {
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line));
-  border-radius: 8px;
-  padding: 10px;
-  background: color-mix(in srgb, var(--accent) 7%, var(--surface-3));
-}
-
 .remoteExecutionActions,
 .remotePortTarget {
   display: flex;
@@ -1630,8 +1623,7 @@ summary:focus-visible {
   gap: 8px;
 }
 
-.scannerTargetRow label,
-.scannerScope {
+.scannerTargetRow label {
   display: grid;
   gap: 5px;
 }
@@ -1708,23 +1700,6 @@ summary:focus-visible {
   font-size: 10px;
   font-weight: 750;
   line-height: 1.25;
-}
-
-.scannerScope {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 9px 10px;
-  color: var(--muted);
-  background: var(--surface-2);
-  font-size: 11px;
-  font-weight: 750;
-  line-height: 1.35;
-}
-
-.scannerScope input {
-  margin-top: 2px;
 }
 
 .scannerActions {
@@ -2662,21 +2637,6 @@ summary:focus-visible {
   background: var(--surface-2);
 }
 
-.operationsCard input[type="checkbox"] {
-  width: 16px;
-  min-height: 16px;
-  accent-color: var(--workflow-accent);
-}
-
-.operationsCard .remoteScopeCheck {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: start;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-2);
-}
-
 .operationsCard > header > button,
 .captureResult button,
 .monitorList button,
@@ -3139,11 +3099,6 @@ pre,
   padding-bottom: 11px;
 }
 
-.operationsCard .remoteScopeCheck {
-  border-color: color-mix(in srgb, var(--workflow-accent) 18%, var(--line));
-  background: color-mix(in srgb, var(--workflow-soft) 24%, var(--surface-2));
-}
-
 .contextFooter span {
   border-color: color-mix(in srgb, var(--accent) 14%, var(--line));
   background: color-mix(in srgb, var(--surface-3) 88%, var(--accent-soft));
@@ -3393,14 +3348,6 @@ pre,
   border-right: 0;
   border-bottom: 0;
   border-left: 0;
-  border-radius: 0;
-}
-
-.scannerScope,
-.operationsCard .remoteScopeCheck,
-.remoteScopeConfirmation {
-  border: 0;
-  border-left: 2px solid color-mix(in srgb, var(--workflow-accent) 48%, var(--line));
   border-radius: 0;
 }
 

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ActionClass, ExternalScannerKind};
 
-pub const INTERACTION_SCHEMA_VERSION: u16 = 1;
+pub const INTERACTION_SCHEMA_VERSION: u16 = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InteractionCatalog {
@@ -92,6 +92,7 @@ pub struct InteractionChoice {
     pub value: String,
     pub label: String,
     pub help: String,
+    pub risk: Option<InteractionRisk>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,6 +154,14 @@ impl InteractionField {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InteractionRisk {
+    Safe,
+    Medium,
+    High,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InteractionNamespace {
     pub id: String,
@@ -161,8 +170,8 @@ pub struct InteractionNamespace {
     pub label: String,
     pub description: String,
     pub group: InteractionGroup,
+    pub risk: InteractionRisk,
     pub action_class: ActionClass,
-    pub requires_scope_confirmation: bool,
     pub fields: Vec<InteractionField>,
     pub capabilities: Vec<InteractionCapability>,
     pub examples: Vec<String>,
@@ -236,6 +245,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "Beginner check",
             "Choose a safe first probe for a target and show a structured verdict.",
             InteractionGroup::Diagnose,
+            InteractionRisk::Safe,
             ActionClass::LocalInspection,
             vec![target_field(
                 "target",
@@ -250,6 +260,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "Ping",
             "Measure local reachability and latency without changing the target.",
             InteractionGroup::Diagnose,
+            InteractionRisk::Safe,
             ActionClass::ActiveProbe,
             vec![
                 target_field("target", "Target", "IP address or domain"),
@@ -275,6 +286,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "Trace route",
             "Inspect hop-by-hop path behavior with an explicitly selected protocol.",
             InteractionGroup::Diagnose,
+            InteractionRisk::Safe,
             ActionClass::ActiveProbe,
             vec![
                 target_field("target", "Target", "IP address or domain"),
@@ -284,9 +296,9 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
                     "Probe protocol",
                     "icmp",
                     &[
-                        ("icmp", "ICMP", "Default route trace"),
-                        ("tcp", "TCP", "TCP-based trace"),
-                        ("udp", "UDP", "UDP-based trace"),
+                        ("icmp", "ICMP", "Default route trace", None),
+                        ("tcp", "TCP", "TCP-based trace", None),
+                        ("udp", "UDP", "UDP-based trace", None),
                     ],
                 ),
                 optional_integer_field("port", "Port", "TCP/UDP destination port"),
@@ -300,6 +312,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "DNS lookup",
             "Resolve one record through the local resolver or a selected server.",
             InteractionGroup::Diagnose,
+            InteractionRisk::Safe,
             ActionClass::PassiveLookup,
             vec![
                 target_field("domain", "Domain", "Domain name to resolve"),
@@ -309,12 +322,12 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
                     "DNS record type",
                     "A",
                     &[
-                        ("A", "A", "IPv4 address"),
-                        ("AAAA", "AAAA", "IPv6 address"),
-                        ("CNAME", "CNAME", "Canonical name"),
-                        ("MX", "MX", "Mail exchanger"),
-                        ("NS", "NS", "Authoritative name server"),
-                        ("TXT", "TXT", "Text record"),
+                        ("A", "A", "IPv4 address", None),
+                        ("AAAA", "AAAA", "IPv6 address", None),
+                        ("CNAME", "CNAME", "Canonical name", None),
+                        ("MX", "MX", "Mail exchanger", None),
+                        ("NS", "NS", "Authoritative name server", None),
+                        ("TXT", "TXT", "Text record", None),
                     ],
                 ),
                 optional_text_field("server", "DNS server", "Optional resolver IP"),
@@ -326,8 +339,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "port",
             "Port check",
             "Check one host and one TCP port from this machine.",
-            InteractionGroup::Diagnose,
-            ActionClass::ActiveProbe,
+            InteractionGroup::Diagnose, InteractionRisk::Safe, ActionClass::ActiveProbe,
             vec![
                 target_field("host", "Host", "IP address or domain"),
                 integer_field("port", "Port", "TCP destination port", "443"),
@@ -345,8 +357,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "myip",
             "My Internet path",
             "Show this machine's public egress and resolver path.",
-            InteractionGroup::Diagnose,
-            ActionClass::PassiveLookup,
+            InteractionGroup::Diagnose, InteractionRisk::Safe, ActionClass::PassiveLookup,
             vec![],
             &[InteractionCapability::Run],
             &["/myip"],
@@ -355,8 +366,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "probe",
             "Core probe",
             "Select a registered core probe for a parsed target.",
-            InteractionGroup::Diagnose,
-            ActionClass::LocalInspection,
+            InteractionGroup::Diagnose, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![
                 text_field("probe_id", "Probe", "Registered probe ID", true),
                 target_field("target", "Target", "Target accepted by the selected probe"),
@@ -368,8 +378,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "tools",
             "Tool packages",
             "Browse plugin status, install policy, path, version, and supported actions.",
-            InteractionGroup::Tooling,
-            ActionClass::LocalInspection,
+            InteractionGroup::Tooling, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![],
             &[InteractionCapability::Status, InteractionCapability::View],
             &["/tools"],
@@ -381,11 +390,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             label: "Open desktop app".into(),
             description: "Launch the SonarNwork desktop interface from this terminal.".into(),
             group: InteractionGroup::Tooling,
-            action_class: ActionClass::LocalInspection,
-            requires_scope_confirmation: false,
-            fields: vec![],
-            capabilities: vec![InteractionCapability::View],
-            examples: vec!["/open ui".into()],
+            risk: InteractionRisk::Safe, action_class: ActionClass::LocalInspection, fields: vec![], capabilities: vec![InteractionCapability::View], examples: vec!["/open ui".into()],
         },
         InteractionNamespace {
             id: "app-update".into(),
@@ -394,18 +399,13 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             label: "Update SonarNwork".into(),
             description: "Install the latest published SonarNwork version through the current install channel.".into(),
             group: InteractionGroup::Tooling,
-            action_class: ActionClass::LocalInspection,
-            requires_scope_confirmation: false,
-            fields: vec![confirmation_field("confirm", "Confirm update")],
-            capabilities: vec![InteractionCapability::Update],
-            examples: vec!["/update".into()],
+            risk: InteractionRisk::Safe, action_class: ActionClass::LocalInspection, fields: vec![confirmation_field("confirm", "Confirm update")], capabilities: vec![InteractionCapability::Update], examples: vec!["/update".into()],
         },
         namespace(
             "tool-status",
             "Tool status",
             "Check one plugin executable path and version without running it.",
-            InteractionGroup::Tooling,
-            ActionClass::LocalInspection,
+            InteractionGroup::Tooling, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![text_field("tool_id", "Tool", "Plugin/tool ID", true)],
             &[InteractionCapability::Status],
             &["/tool-status nmap"],
@@ -414,8 +414,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "tool-lifecycle",
             "Tool lifecycle",
             "Inspect the install/update policy for one plugin package.",
-            InteractionGroup::Tooling,
-            ActionClass::LocalInspection,
+            InteractionGroup::Tooling, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![text_field("tool_id", "Tool", "Plugin/tool ID", true)],
             &[InteractionCapability::View],
             &["/tool-lifecycle nuclei"],
@@ -424,8 +423,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "tool-install",
             "Install tool package",
             "Explicitly install or hand off the official installer for one plugin.",
-            InteractionGroup::Tooling,
-            ActionClass::LocalInspection,
+            InteractionGroup::Tooling, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![
                 text_field("tool_id", "Tool", "Plugin/tool ID", true),
                 confirmation_field("confirm", "Confirm install"),
@@ -437,8 +435,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "tool-update",
             "Update tool package",
             "Explicitly update one managed plugin package.",
-            InteractionGroup::Tooling,
-            ActionClass::LocalInspection,
+            InteractionGroup::Tooling, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![
                 text_field("tool_id", "Tool", "Plugin/tool ID", true),
                 confirmation_field("confirm", "Confirm update"),
@@ -450,8 +447,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "globalping",
             "Remote measurement",
             "Run a bounded Globalping measurement; this is not a public port scan.",
-            InteractionGroup::Remote,
-            ActionClass::ActiveProbe,
+            InteractionGroup::Remote, InteractionRisk::Medium, ActionClass::ActiveProbe,
             vec![
                 target_field("target", "Target", "Public target accepted by Globalping"),
                 choice_field(
@@ -460,11 +456,11 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
                     "Remote measurement type",
                     "ping",
                     &[
-                        ("ping", "Ping", "Remote latency and reachability"),
-                        ("trace", "Trace", "Remote route trace"),
-                        ("mtr", "MTR", "Remote loss and latency path"),
-                        ("dns", "DNS", "Remote DNS resolution"),
-                        ("http", "HTTP", "Remote HTTP request"),
+                        ("ping", "Ping", "Remote latency and reachability", None),
+                        ("trace", "Trace", "Remote route trace", None),
+                        ("mtr", "MTR", "Remote loss and latency path", None),
+                        ("dns", "DNS", "Remote DNS resolution", None),
+                        ("http", "HTTP", "Remote HTTP request", None),
                     ],
                 ),
                 optional_text_field("location", "Location", "Optional probe location hint"),
@@ -476,8 +472,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "remote-port",
             "Remote port check",
             "Run a bounded single-port TCP check through the configured remote provider.",
-            InteractionGroup::Remote,
-            ActionClass::ActiveProbe,
+            InteractionGroup::Remote, InteractionRisk::Medium, ActionClass::ActiveProbe,
             vec![
                 target_field("target", "Public host", "Public IP address or domain"),
                 integer_field("port", "Port", "One TCP port", "443"),
@@ -489,8 +484,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "capture",
             "Packet capture",
             "Capture a bounded packet sample and explicitly hand off the resulting file.",
-            InteractionGroup::Capture,
-            ActionClass::IntrusiveScan,
+            InteractionGroup::Capture, InteractionRisk::High, ActionClass::IntrusiveScan,
             vec![
                 text_field("interface_id", "Interface", "Capture interface ID", true),
                 integer_field(
@@ -517,8 +511,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "capture-status",
             "Capture runtime status",
             "Check TShark/Wireshark availability and version.",
-            InteractionGroup::Capture,
-            ActionClass::LocalInspection,
+            InteractionGroup::Capture, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![],
             &[InteractionCapability::Status],
             &["/capture-status"],
@@ -527,8 +520,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "capture-interfaces",
             "Capture interfaces",
             "List packet capture interface IDs exposed by TShark.",
-            InteractionGroup::Capture,
-            ActionClass::LocalInspection,
+            InteractionGroup::Capture, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![],
             &[InteractionCapability::View],
             &["/capture-interfaces"],
@@ -537,8 +529,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "capture-open",
             "Open packet capture",
             "Hand off one SonarNwork pcapng file to Wireshark or the file manager.",
-            InteractionGroup::Capture,
-            ActionClass::LocalInspection,
+            InteractionGroup::Capture, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![text_field(
                 "path",
                 "Capture path",
@@ -552,8 +543,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "inventory",
             "Device inventory",
             "Collect a passive local neighbor inventory snapshot.",
-            InteractionGroup::Inventory,
-            ActionClass::LocalInspection,
+            InteractionGroup::Inventory, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![],
             &[InteractionCapability::Run, InteractionCapability::View],
             &["/inventory"],
@@ -562,8 +552,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "monitor",
             "Background monitor",
             "Monitor a target while the application is running and record threshold events.",
-            InteractionGroup::Monitor,
-            ActionClass::ActiveProbe,
+            InteractionGroup::Monitor, InteractionRisk::Medium, ActionClass::ActiveProbe,
             vec![
                 target_field("target", "Target", "IP address or domain"),
                 integer_field(
@@ -596,8 +585,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "monitor-list",
             "List monitors",
             "Show persisted monitor configurations and whether each is enabled.",
-            InteractionGroup::Monitor,
-            ActionClass::LocalInspection,
+            InteractionGroup::Monitor, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![],
             &[InteractionCapability::View],
             &["/monitor-list"],
@@ -606,8 +594,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "monitor-stop",
             "Stop monitor",
             "Stop one persisted monitor by ID.",
-            InteractionGroup::Monitor,
-            ActionClass::LocalInspection,
+            InteractionGroup::Monitor, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![text_field(
                 "monitor_id",
                 "Monitor ID",
@@ -621,8 +608,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "timeline",
             "Event timeline",
             "Browse or explicitly clear persisted monitoring and operation events.",
-            InteractionGroup::History,
-            ActionClass::LocalInspection,
+            InteractionGroup::History, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![],
             &[InteractionCapability::View, InteractionCapability::Clear],
             &["/timeline"],
@@ -631,8 +617,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "timeline-clear",
             "Clear event timeline",
             "Explicitly clear all persisted monitoring and operation events.",
-            InteractionGroup::History,
-            ActionClass::LocalInspection,
+            InteractionGroup::History, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![confirmation_field("confirm", "Confirm clear")],
             &[InteractionCapability::Clear],
             &["/timeline-clear"],
@@ -641,8 +626,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "history",
             "Run history",
             "Browse, compare, or explicitly delete saved structured runs.",
-            InteractionGroup::History,
-            ActionClass::LocalInspection,
+            InteractionGroup::History, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![],
             &[InteractionCapability::View, InteractionCapability::Delete],
             &["/history"],
@@ -651,8 +635,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "history-get",
             "Open saved run",
             "Load one saved structured run by ID.",
-            InteractionGroup::History,
-            ActionClass::LocalInspection,
+            InteractionGroup::History, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![text_field("run_id", "Run ID", "Saved run ID", true)],
             &[InteractionCapability::View],
             &["/history-get <id>"],
@@ -661,8 +644,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "history-compare",
             "Compare saved runs",
             "Compare two runs of the same probe and normalized target.",
-            InteractionGroup::History,
-            ActionClass::LocalInspection,
+            InteractionGroup::History, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![
                 text_field("left_id", "Earlier run", "Earlier saved run ID", true),
                 text_field("right_id", "Later run", "Later saved run ID", true),
@@ -674,8 +656,7 @@ pub fn core_interaction_catalog() -> InteractionCatalog {
             "history-delete",
             "Delete saved run",
             "Explicitly delete one saved structured run.",
-            InteractionGroup::History,
-            ActionClass::LocalInspection,
+            InteractionGroup::History, InteractionRisk::Safe, ActionClass::LocalInspection,
             vec![
                 text_field("run_id", "Run ID", "Saved run ID", true),
                 confirmation_field("confirm", "Confirm delete"),
@@ -702,14 +683,15 @@ pub fn scanner_interaction_namespace(kind: ExternalScannerKind) -> InteractionNa
                     "Only Nmap profiles are valid in this namespace",
                     "nmap_top_ports",
                     &[
-                        ("nmap_top_ports", "Top ports", "Fast common-port discovery"),
-                        ("nmap_version", "Version", "Light service/version detection"),
+                        ("nmap_top_ports", "Top ports", "Fast common-port discovery", Some(InteractionRisk::Safe)),
+                        ("nmap_version", "Version", "Light service/version detection", Some(InteractionRisk::Medium)),
                         (
                             "nmap_service_deep",
                             "Deep service",
                             "More detailed service detection",
+                            Some(InteractionRisk::Medium),
                         ),
-                        ("nmap_udp_quick", "Quick UDP", "Bounded UDP discovery"),
+                        ("nmap_udp_quick", "Quick UDP", "Bounded UDP discovery", Some(InteractionRisk::Medium)),
                     ],
                 ),
                 choice_field(
@@ -718,9 +700,9 @@ pub fn scanner_interaction_namespace(kind: ExternalScannerKind) -> InteractionNa
                     "Port selection for the Nmap profile",
                     "top",
                     &[
-                        ("top", "Top", "Profile-selected common ports"),
-                        ("all", "All", "All ports; slower and more intrusive"),
-                        ("custom", "Custom", "Explicit list or ranges"),
+                        ("top", "Top", "Profile-selected common ports", Some(InteractionRisk::Safe)),
+                        ("all", "All", "All ports; slower and more intrusive", Some(InteractionRisk::Medium)),
+                        ("custom", "Custom", "Explicit list or ranges", Some(InteractionRisk::Medium)),
                     ],
                 ),
                 InteractionField {
@@ -749,18 +731,20 @@ pub fn scanner_interaction_namespace(kind: ExternalScannerKind) -> InteractionNa
                     "Only Nuclei profiles are valid in this namespace",
                     "nuclei_safe",
                     &[
-                        ("nuclei_safe", "Safe", "Lower-impact template set"),
+                        ("nuclei_safe", "Safe", "Lower-impact template set", Some(InteractionRisk::Safe)),
                         (
                             "nuclei_http_exposure",
                             "HTTP exposure",
                             "Web exposure and misconfiguration templates",
+                            Some(InteractionRisk::Medium),
                         ),
                         (
                             "nuclei_known_vulns",
                             "Known vulnerabilities",
                             "Known-vulnerability templates",
+                            Some(InteractionRisk::Medium),
                         ),
-                        ("nuclei_full", "Full", "Broad intrusive template profile"),
+                        ("nuclei_full", "Full", "Broad intrusive template profile", Some(InteractionRisk::High)),
                     ],
                 ),
             ],
@@ -768,13 +752,13 @@ pub fn scanner_interaction_namespace(kind: ExternalScannerKind) -> InteractionNa
         ),
         ExternalScannerKind::Httpx => (
             "httpx",
-            "Probe one scoped web target and retain structured response metadata.",
+            "Probe one web target and retain structured response metadata.",
             vec![target],
             vec!["/httpx https://example.com"],
         ),
         ExternalScannerKind::Naabu => (
             "naabu",
-            "Discover ports on one explicitly scoped host.",
+            "Discover ports on one host with bounded settings.",
             vec![
                 target,
                 ports_field("ports", "Ports", "Optional ports or ranges"),
@@ -783,13 +767,13 @@ pub fn scanner_interaction_namespace(kind: ExternalScannerKind) -> InteractionNa
         ),
         ExternalScannerKind::Subfinder => (
             "subfinder",
-            "Perform passive subdomain discovery for an authorized domain.",
+            "Perform passive subdomain discovery for one domain.",
             vec![target],
             vec!["/subfinder example.com"],
         ),
         ExternalScannerKind::Dnsx => (
             "dnsx",
-            "Resolve a scoped domain with the managed dnsx runner.",
+            "Resolve one domain with the managed dnsx runner.",
             vec![target],
             vec!["/dnsx example.com"],
         ),
@@ -814,8 +798,7 @@ pub fn scanner_interaction_namespace(kind: ExternalScannerKind) -> InteractionNa
         label: label.into(),
         description: description.into(),
         group: InteractionGroup::Scanner,
-        action_class: kind.action_class(),
-        requires_scope_confirmation: kind.action_class() != ActionClass::PassiveLookup,
+        risk: InteractionRisk::Safe, action_class: kind.action_class(),
         fields,
         capabilities: vec![
             InteractionCapability::Status,
@@ -830,9 +813,7 @@ pub fn scanner_interaction_namespace(kind: ExternalScannerKind) -> InteractionNa
 
 fn scanner_target_help(kind: ExternalScannerKind) -> &'static str {
     match kind {
-        ExternalScannerKind::Nmap | ExternalScannerKind::Naabu => {
-            "Single IP, host, or explicitly authorized CIDR"
-        }
+        ExternalScannerKind::Nmap | ExternalScannerKind::Naabu => "Single IP, host, or CIDR",
         ExternalScannerKind::Nuclei | ExternalScannerKind::Httpx => "HTTP(S) URL or host",
         ExternalScannerKind::Subfinder | ExternalScannerKind::Dnsx => "Domain name",
         ExternalScannerKind::Trippy | ExternalScannerKind::Nexttrace => "IP address or domain",
@@ -845,6 +826,7 @@ fn namespace(
     label: &str,
     description: &str,
     group: InteractionGroup,
+    risk: InteractionRisk,
     action_class: ActionClass,
     fields: Vec<InteractionField>,
     capabilities: &[InteractionCapability],
@@ -856,6 +838,7 @@ fn namespace(
         label,
         description,
         group,
+        risk,
         action_class,
         fields,
         capabilities,
@@ -870,6 +853,7 @@ fn namespace_with_aliases(
     label: &str,
     description: &str,
     group: InteractionGroup,
+    risk: InteractionRisk,
     action_class: ActionClass,
     fields: Vec<InteractionField>,
     capabilities: &[InteractionCapability],
@@ -882,11 +866,8 @@ fn namespace_with_aliases(
         label: label.into(),
         description: description.into(),
         group,
+        risk,
         action_class,
-        requires_scope_confirmation: matches!(
-            action_class,
-            ActionClass::ActiveProbe | ActionClass::IntrusiveScan | ActionClass::ExternalTool
-        ),
         fields,
         capabilities: capabilities.to_vec(),
         examples: examples.iter().map(|example| (*example).into()).collect(),
@@ -965,7 +946,7 @@ fn choice_field(
     label: &str,
     help: &str,
     default: &str,
-    choices: &[(&str, &str, &str)],
+    choices: &[(&str, &str, &str, Option<InteractionRisk>)],
 ) -> InteractionField {
     InteractionField {
         id: id.into(),
@@ -977,10 +958,11 @@ fn choice_field(
         placeholder: None,
         choices: choices
             .iter()
-            .map(|(value, label, help)| InteractionChoice {
+            .map(|(value, label, help, risk)| InteractionChoice {
                 value: (*value).into(),
                 label: (*label).into(),
                 help: (*help).into(),
+                risk: *risk,
             })
             .collect(),
         visible_when: None,
@@ -994,8 +976,8 @@ fn confirmation_field(id: &str, label: &str) -> InteractionField {
         "Select Yes only after reviewing the destructive or mutating action",
         "no",
         &[
-            ("no", "No", "Do not perform the action"),
-            ("yes", "Yes", "I explicitly confirm this action"),
+            ("no", "No", "Do not perform the action", None),
+            ("yes", "Yes", "I explicitly confirm this action", None),
         ],
     )
 }
@@ -1031,6 +1013,30 @@ mod tests {
         assert!(valid_trigger("/open-ui"));
         assert!(!valid_trigger("/open  ui"));
         assert!(!valid_trigger("/Open ui"));
+    }
+
+    #[test]
+    fn nuclei_profile_risk_labels_are_correct() {
+        let nuclei = scanner_interaction_namespace(ExternalScannerKind::Nuclei);
+        let profile_field = nuclei.fields.iter().find(|f| f.id == "profile").unwrap();
+
+        let safe = profile_field.choices.iter().find(|c| c.value == "nuclei_safe").unwrap();
+        assert_eq!(safe.risk, Some(InteractionRisk::Safe));
+
+        let full = profile_field.choices.iter().find(|c| c.value == "nuclei_full").unwrap();
+        assert_eq!(full.risk, Some(InteractionRisk::High));
+    }
+
+    #[test]
+    fn nmap_profile_risk_labels_are_correct() {
+        let nmap = scanner_interaction_namespace(ExternalScannerKind::Nmap);
+        let profile_field = nmap.fields.iter().find(|f| f.id == "profile").unwrap();
+
+        let top = profile_field.choices.iter().find(|c| c.value == "nmap_top_ports").unwrap();
+        assert_eq!(top.risk, Some(InteractionRisk::Safe));
+
+        let deep = profile_field.choices.iter().find(|c| c.value == "nmap_service_deep").unwrap();
+        assert_eq!(deep.risk, Some(InteractionRisk::Medium));
     }
 
     #[test]
