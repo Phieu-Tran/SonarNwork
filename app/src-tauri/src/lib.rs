@@ -127,14 +127,9 @@ fn scanner_kind(tool_id: &str) -> Result<ExternalScannerKind, String> {
 fn scanner_invocation(
     tool_id: &str,
     target: &ProbeTarget,
-    scope_confirmed: bool,
     scan_profile: Option<String>,
     scan_ports: Option<String>,
 ) -> Result<(ExternalScannerKind, CommandInvocation), String> {
-    if !scope_confirmed {
-        return Err("confirm that you own or are authorized to scan this target".into());
-    }
-
     let kind = scanner_kind(tool_id)?;
     let runtime = ToolCatalog::phase_zero_defaults()
         .runtime_status(tool_id)
@@ -159,14 +154,9 @@ fn scanner_invocation(
 fn scanner_cli_invocation(
     tool_id: &str,
     target: &ProbeTarget,
-    scope_confirmed: bool,
     scan_profile: Option<String>,
     scan_ports: Option<String>,
 ) -> Result<CommandInvocation, String> {
-    if !scope_confirmed {
-        return Err("confirm that you own or are authorized to scan this target".into());
-    }
-
     let kind = scanner_kind(tool_id)?;
     let target_arg = scanner_cli_target(target)?;
     let mode = scanner_mode(kind, scan_profile.as_deref())?;
@@ -187,7 +177,6 @@ fn scanner_cli_invocation(
     if matches!(kind, ExternalScannerKind::Nmap | ExternalScannerKind::Naabu) {
         args.extend(["--ports".into(), scanner_ports_id(&ports)]);
     }
-    args.push("--yes".into());
 
     Ok(CommandInvocation {
         program: "sonarnwork".into(),
@@ -343,12 +332,10 @@ fn probe_cli_invocation(probe_id: &str, target: &ProbeTarget) -> Result<CommandI
 fn scanner_command(
     tool_id: String,
     target: ProbeTarget,
-    scope_confirmed: bool,
     scan_profile: Option<String>,
     scan_ports: Option<String>,
 ) -> Result<CommandPreview, String> {
-    let invocation =
-        scanner_cli_invocation(&tool_id, &target, scope_confirmed, scan_profile, scan_ports)?;
+    let invocation = scanner_cli_invocation(&tool_id, &target, scan_profile, scan_ports)?;
     Ok(CommandPreview::from_invocation(invocation))
 }
 
@@ -356,12 +343,10 @@ fn scanner_command(
 fn open_scanner_terminal(
     tool_id: String,
     target: ProbeTarget,
-    scope_confirmed: bool,
     scan_profile: Option<String>,
     scan_ports: Option<String>,
 ) -> Result<(), String> {
-    let invocation =
-        scanner_cli_invocation(&tool_id, &target, scope_confirmed, scan_profile, scan_ports)?;
+    let invocation = scanner_cli_invocation(&tool_id, &target, scan_profile, scan_ports)?;
     open_terminal(invocation)
 }
 
@@ -492,12 +477,10 @@ async fn run_scanner_live(
     run_id: String,
     tool_id: String,
     target: ProbeTarget,
-    scope_confirmed: bool,
     scan_profile: Option<String>,
     scan_ports: Option<String>,
 ) -> Result<ScannerRunView, String> {
-    let (kind, invocation) =
-        scanner_invocation(&tool_id, &target, scope_confirmed, scan_profile, scan_ports)?;
+    let (kind, invocation) = scanner_invocation(&tool_id, &target, scan_profile, scan_ports)?;
     let processes = live_processes.registry();
     let summary = tauri::async_runtime::spawn_blocking(move || {
         run_live_command(app, run_id, invocation, processes)
@@ -1185,8 +1168,7 @@ mod tests {
     use super::{
         app_core_for_target, cargo_sonarnwork_invocation, installer_url_allowed,
         interaction_catalog, invocation_with_override, parse_command_line, probe_cli_invocation,
-        scanner_cli_invocation, scanner_invocation, scanner_kind, terminal_command_line,
-        terminal_invocation,
+        scanner_cli_invocation, scanner_kind, terminal_command_line, terminal_invocation,
     };
 
     #[test]
@@ -1208,7 +1190,7 @@ mod tests {
         }
 
         let value = serde_json::to_value(catalog).unwrap();
-        assert_eq!(value["schema_version"], 1);
+        assert_eq!(value["schema_version"], 2);
         assert!(value["namespaces"]
             .as_array()
             .is_some_and(|items| !items.is_empty()));
@@ -1416,25 +1398,10 @@ mod tests {
     }
 
     #[test]
-    fn scanner_preview_requires_explicit_scope_before_runtime_detection() {
-        let error = scanner_invocation(
-            "nmap",
-            &ProbeTarget::Input("127.0.0.1".into()),
-            false,
-            None,
-            None,
-        )
-        .unwrap_err();
-
-        assert!(error.contains("authorized"));
-    }
-
-    #[test]
     fn scanner_cli_preview_uses_sonarnwork_without_runtime_detection() {
         let invocation = scanner_cli_invocation(
             "nmap",
             &ProbeTarget::Input("103.29.26.0/24".into()),
-            true,
             Some("version".into()),
             Some("all".into()),
         )
@@ -1451,24 +1418,24 @@ mod tests {
                 "--profile",
                 "version",
                 "--ports",
-                "all",
-                "--yes"
+                "all"
             ]
         );
+        assert!(!invocation.args.iter().any(|arg| arg == "--yes"));
     }
 
     #[test]
-    fn scanner_cli_preview_requires_explicit_scope() {
-        let error = scanner_cli_invocation(
+    fn nuclei_cli_preview_runs_without_scope_confirmation() {
+        let invocation = scanner_cli_invocation(
             "nuclei",
             &ProbeTarget::Input("https://example.com".into()),
-            false,
             None,
             None,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert!(error.contains("authorized"));
+        assert_eq!(invocation.program, "sonarnwork");
+        assert!(!invocation.args.iter().any(|arg| arg == "--yes"));
     }
 
     #[test]

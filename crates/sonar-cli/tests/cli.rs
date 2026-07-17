@@ -188,11 +188,21 @@ fn unknown_command_fails() {
 }
 
 #[test]
-fn scanner_without_scope_confirmation_exits_four() {
-    cli()
-        .args(["scanner", "run", "nmap", "127.0.0.1"])
-        .assert()
-        .code(4);
+fn target_commands_do_not_require_confirmation_flags() {
+    for args in [
+        &["scanner", "run", "--help"][..],
+        &["remote", "globalping", "--help"][..],
+        &["remote", "port", "--help"][..],
+        &["capture", "run", "--help"][..],
+        &["monitor", "start", "--help"][..],
+    ] {
+        cli()
+            .args(args)
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("--yes").not())
+            .stdout(predicate::str::contains("i-am-authorized").not());
+    }
 }
 
 #[test]
@@ -248,33 +258,6 @@ fn tool_install_requires_explicit_confirmation() {
         .assert()
         .code(4)
         .stderr(predicate::str::contains("confirm"));
-}
-
-#[test]
-fn capture_requires_explicit_interface_authorization() {
-    cli()
-        .args([
-            "capture",
-            "run",
-            "--interface",
-            "1",
-            "--duration",
-            "1",
-            "--packets",
-            "1",
-        ])
-        .assert()
-        .code(4)
-        .stderr(predicate::str::contains("authorized"));
-}
-
-#[test]
-fn monitor_requires_explicit_target_authorization() {
-    cli()
-        .args(["monitor", "start", "example.com"])
-        .assert()
-        .code(4)
-        .stderr(predicate::str::contains("authorized"));
 }
 
 #[test]

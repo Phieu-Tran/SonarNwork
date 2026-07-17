@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "semble": {
+      "command": "C:\\Users\\hieut\\.local\\bin\\semble.exe",
+      "args": ["--content", "all"]
+    }
+  }
+}

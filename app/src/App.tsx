@@ -489,14 +489,14 @@ const WORKFLOW_TABS: Record<
       eyebrow: "Network mapper",
       title: "Nmap",
       description:
-        "Discover open ports and services with explicit scope, a command preview and bounded scan profiles.",
+        "Discover open ports and services with a command preview and bounded scan profiles.",
     },
     vi: {
       label: "Nmap",
       eyebrow: "Lập bản đồ mạng",
       title: "Nmap",
       description:
-        "Tìm port và dịch vụ đang mở với xác nhận phạm vi, xem trước lệnh và profile quét có giới hạn.",
+        "Tìm port và dịch vụ đang mở với xem trước lệnh và profile quét có giới hạn.",
     },
   },
   tool_nuclei: {
@@ -505,14 +505,14 @@ const WORKFLOW_TABS: Record<
       eyebrow: "Template security checks",
       title: "Nuclei",
       description:
-        "Run selected security templates against an explicitly authorized URL with separate update controls.",
+        "Run selected security templates against a URL with separate update controls.",
     },
     vi: {
       label: "Nuclei",
       eyebrow: "Kiểm tra bảo mật theo template",
       title: "Nuclei",
       description:
-        "Chạy template bảo mật đã chọn trên URL được cấp quyền rõ ràng, với cơ chế cập nhật riêng.",
+        "Chạy template bảo mật đã chọn trên URL, với cơ chế cập nhật riêng.",
     },
   },
   tool_globalping: {
@@ -562,13 +562,13 @@ const WORKFLOW_TABS: Record<
       label: "naabu",
       eyebrow: "TCP port discovery",
       title: "naabu",
-      description: "Find open TCP ports with a bounded connect-mode scan on an authorized target.",
+      description: "Find open TCP ports with a bounded connect-mode scan on one target.",
     },
     vi: {
       label: "naabu",
       eyebrow: "Tìm cổng TCP",
       title: "naabu",
-      description: "Tìm các cổng TCP đang mở bằng lượt quét connect có giới hạn trên mục tiêu được phép.",
+      description: "Tìm các cổng TCP đang mở bằng lượt quét connect có giới hạn trên một mục tiêu.",
     },
   },
   tool_subfinder: {
@@ -2457,7 +2457,6 @@ function ManagedToolPage({
   );
   const [scanPorts, setScanPorts] = useState<ScannerPortsId>(defaultScannerPorts());
   const [customPorts, setCustomPorts] = useState("80,443");
-  const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [commandPreview, setCommandPreview] = useState<CommandPreview | null>(null);
   const [liveLines, setLiveLines] = useState<string[]>([]);
   const [scannerResult, setScannerResult] = useState<ScannerRunView | null>(null);
@@ -2475,7 +2474,6 @@ function ManagedToolPage({
     setScanProfile(defaultScannerProfile(toolId, interactionCatalog));
     setScanPorts(defaultScannerPorts());
     setCustomPorts("80,443");
-    setScopeConfirmed(false);
     setCommandPreview(null);
     setLiveLines([]);
     setScannerResult(null);
@@ -2556,7 +2554,6 @@ function ManagedToolPage({
   const targetField = scannerField(interactionCatalog, toolId, "target");
   const portsField = scannerField(interactionCatalog, toolId, "ports");
   const customPortsField = scannerField(interactionCatalog, toolId, "custom_ports");
-  const requiresScopeConfirmation = interactionNamespace?.requires_scope_confirmation ?? true;
   const resolvedScanPorts = hasPorts
     ? portsField?.kind === "ports"
       ? customPorts.trim() || undefined
@@ -2633,7 +2630,6 @@ function ManagedToolPage({
         await invoke<CommandPreview>("scanner_command", {
           toolId,
           target: scannerTarget(),
-          scopeConfirmed,
           scanProfile,
           scanPorts: resolvedScanPorts,
         }),
@@ -2659,7 +2655,6 @@ function ManagedToolPage({
         runId,
         toolId,
         target: scannerTarget(),
-        scopeConfirmed,
         scanProfile,
         scanPorts: resolvedScanPorts,
       });
@@ -2708,7 +2703,6 @@ function ManagedToolPage({
       await invoke("open_scanner_terminal", {
         toolId,
         target: scannerTarget(),
-        scopeConfirmed,
         scanProfile,
         scanPorts: resolvedScanPorts,
       });
@@ -2883,31 +2877,11 @@ function ManagedToolPage({
                 </div>
               ) : null}
 
-              {requiresScopeConfirmation ? (
-                <label className="scopeConfirmation scannerScope">
-                  <input
-                    name="scanner-scope-confirmed"
-                    type="checkbox"
-                    checked={scopeConfirmed}
-                    onChange={(event) => {
-                      setScopeConfirmed(event.target.checked);
-                      setCommandPreview(null);
-                    }}
-                    disabled={isRunning}
-                  />
-                  <span>
-                    {locale === "vi"
-                      ? "Tôi sở hữu hoặc được phép quét mục tiêu này."
-                      : "I own or am authorized to scan this target."}
-                  </span>
-                </label>
-              ) : null}
-
               <div className="scannerActions">
                 <button
                   className="secondaryButton"
                   onClick={() => void previewScanner()}
-                  disabled={!scopeConfirmed || !target.trim() || isRunning}
+                  disabled={!target.trim() || isRunning}
                 >
                   <SquareTerminal size={14} />
                   <span>{locale === "vi" ? "Xem lệnh" : "Show command"}</span>
@@ -2915,7 +2889,7 @@ function ManagedToolPage({
                 <button
                   className="primaryButton"
                   onClick={() => void runScanner()}
-                  disabled={!runtime?.available || !scopeConfirmed || !target.trim() || isRunning}
+                  disabled={!runtime?.available || !target.trim() || isRunning}
                 >
                   <Play size={14} />
                   <span>
@@ -2927,7 +2901,7 @@ function ManagedToolPage({
                 <button
                   className="secondaryButton"
                   onClick={() => void openScannerCli()}
-                  disabled={!scopeConfirmed || !target.trim() || isRunning}
+                  disabled={!target.trim() || isRunning}
                 >
                   <Terminal size={14} />
                   <span>{locale === "vi" ? "Mở CLI" : "Open CLI"}</span>
@@ -3021,7 +2995,6 @@ function OperationsPage({ locale }: { locale: Locale }) {
   const [interfaceId, setInterfaceId] = useState("");
   const [durationSeconds, setDurationSeconds] = useState("15");
   const [packetLimit, setPacketLimit] = useState("5000");
-  const [captureScope, setCaptureScope] = useState(false);
   const [captureResult, setCaptureResult] = useState<CaptureResult | null>(null);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [inventory, setInventory] = useState<InventorySnapshot | null>(null);
@@ -3032,7 +3005,6 @@ function OperationsPage({ locale }: { locale: Locale }) {
   const [monitorInterval, setMonitorInterval] = useState("60");
   const [latencyThreshold, setLatencyThreshold] = useState("500");
   const [lossThreshold, setLossThreshold] = useState("100");
-  const [monitorScope, setMonitorScope] = useState(false);
   const [monitorBusy, setMonitorBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -3079,7 +3051,7 @@ function OperationsPage({ locale }: { locale: Locale }) {
   }, [locale]);
 
   async function runCapture() {
-    if (captureBusy || !interfaceId || !captureScope) return;
+    if (captureBusy || !interfaceId) return;
     setCaptureBusy(true);
     setError(null);
     try {
@@ -3088,7 +3060,6 @@ function OperationsPage({ locale }: { locale: Locale }) {
           interfaceId,
           durationSeconds: Number(durationSeconds),
           packetLimit: Number(packetLimit),
-          scopeConfirmed: captureScope,
         },
       });
       setCaptureResult(result);
@@ -3113,7 +3084,7 @@ function OperationsPage({ locale }: { locale: Locale }) {
   }
 
   async function addMonitor() {
-    if (monitorBusy || !monitorScope || !monitorTarget.trim()) return;
+    if (monitorBusy || !monitorTarget.trim()) return;
     setMonitorBusy(true);
     setError(null);
     try {
@@ -3123,11 +3094,9 @@ function OperationsPage({ locale }: { locale: Locale }) {
           intervalSeconds: Number(monitorInterval),
           latencyAlertMs: Number(latencyThreshold),
           lossAlertPercent: Number(lossThreshold),
-          scopeConfirmed: monitorScope,
         },
       });
       setMonitors((current) => [...current, monitor]);
-      setMonitorScope(false);
     } catch (reason) {
       setError(String(reason));
     } finally {
@@ -3169,8 +3138,7 @@ function OperationsPage({ locale }: { locale: Locale }) {
             <label><span>{locale === "vi" ? "Thời gian (giây)" : "Duration (seconds)"}</span><input name="capture-duration" type="number" min="1" max="300" value={durationSeconds} onChange={(event) => setDurationSeconds(event.target.value)} /></label>
             <label><span>{locale === "vi" ? "Giới hạn packet" : "Packet limit"}</span><input name="capture-packet-limit" type="number" min="1" max="100000" value={packetLimit} onChange={(event) => setPacketLimit(event.target.value)} /></label>
           </div>
-          <label className="remoteScopeCheck"><input name="capture-scope-confirmed" type="checkbox" checked={captureScope} onChange={(event) => setCaptureScope(event.target.checked)} /><span>{locale === "vi" ? "Tôi được phép capture trên interface này." : "I am authorized to capture on this interface."}</span></label>
-          <button className="primaryRunButton" onClick={() => void runCapture()} disabled={!captureRuntime?.available || !interfaceId || !captureScope || captureBusy}><Play size={16} />{captureBusy ? (locale === "vi" ? "Đang bắt gói…" : "Capturing…") : (locale === "vi" ? "Bắt gói" : "Capture")}</button>
+          <button className="primaryRunButton" onClick={() => void runCapture()} disabled={!captureRuntime?.available || !interfaceId || captureBusy}><Play size={16} />{captureBusy ? (locale === "vi" ? "Đang bắt gói…" : "Capturing…") : (locale === "vi" ? "Bắt gói" : "Capture")}</button>
           {captureResult ? <div className="captureResult"><code>{captureResult.path}</code><span>{formatBytes(captureResult.bytes)}</span><button onClick={() => void invoke("open_capture_handoff", { path: captureResult.path })}>{locale === "vi" ? "Mở / bàn giao" : "Open / hand off"}</button></div> : null}
         </article>
 
@@ -3189,9 +3157,8 @@ function OperationsPage({ locale }: { locale: Locale }) {
             <label><span>{locale === "vi" ? "Cảnh báo độ trễ (ms)" : "Latency alert (ms)"}</span><input name="monitor-latency-threshold" type="number" min="1" max="120000" value={latencyThreshold} onChange={(event) => setLatencyThreshold(event.target.value)} /></label>
             <label><span>{locale === "vi" ? "Cảnh báo mất gói (%)" : "Loss alert (%)"}</span><input name="monitor-loss-threshold" type="number" min="0" max="100" value={lossThreshold} onChange={(event) => setLossThreshold(event.target.value)} /></label>
           </div>
-          <label className="remoteScopeCheck"><input name="monitor-scope-confirmed" type="checkbox" checked={monitorScope} onChange={(event) => setMonitorScope(event.target.checked)} /><span>{locale === "vi" ? "Tôi được phép monitor đích này." : "I am authorized to monitor this target."}</span></label>
-          <button className="primaryRunButton" onClick={() => void addMonitor()} disabled={!monitorScope || monitorBusy}><Activity size={16} />{locale === "vi" ? "Bắt đầu monitor" : "Start monitor"}</button>
-          <div className="monitorList">{monitors.length ? monitors.map((monitor) => <div key={monitor.id}><div><strong>{monitor.target}</strong><span>{monitor.intervalSeconds}s · {monitor.latencyAlertMs}ms · {monitor.lossAlertPercent}%</span></div><em className={monitor.enabled ? "ready" : "stopped"}>{monitor.enabled ? (locale === "vi" ? "đang chạy" : "running") : (locale === "vi" ? "đã dừng" : "stopped")}</em>{monitor.enabled ? <button onClick={() => void disableMonitor(monitor.id)}><Square size={14} />{locale === "vi" ? "Dừng" : "Stop"}</button> : null}</div>) : <div className="emptyState"><Activity size={20} /><strong>{locale === "vi" ? "Chưa có monitor" : "No monitors yet"}</strong><span>{locale === "vi" ? "Nhập đích, xác nhận phạm vi rồi bắt đầu." : "Enter a target, confirm scope, then start."}</span></div>}</div>
+          <button className="primaryRunButton" onClick={() => void addMonitor()} disabled={!monitorTarget.trim() || monitorBusy}><Activity size={16} />{locale === "vi" ? "Bắt đầu monitor" : "Start monitor"}</button>
+          <div className="monitorList">{monitors.length ? monitors.map((monitor) => <div key={monitor.id}><div><strong>{monitor.target}</strong><span>{monitor.intervalSeconds}s · {monitor.latencyAlertMs}ms · {monitor.lossAlertPercent}%</span></div><em className={monitor.enabled ? "ready" : "stopped"}>{monitor.enabled ? (locale === "vi" ? "đang chạy" : "running") : (locale === "vi" ? "đã dừng" : "stopped")}</em>{monitor.enabled ? <button onClick={() => void disableMonitor(monitor.id)}><Square size={14} />{locale === "vi" ? "Dừng" : "Stop"}</button> : null}</div>) : <div className="emptyState"><Activity size={20} /><strong>{locale === "vi" ? "Chưa có monitor" : "No monitors yet"}</strong><span>{locale === "vi" ? "Nhập đích rồi bắt đầu." : "Enter a target, then start."}</span></div>}</div>
         </article>
 
         <article className="operationsCard timelineCard">
@@ -3209,13 +3176,12 @@ function RemoteMeasurementPage({ locale }: { locale: Locale }) {
   const [location, setLocation] = useState("world");
   const [limit, setLimit] = useState("1");
   const [token, setToken] = useState("");
-  const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<GlobalpingMeasurementResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function runMeasurement() {
-    if (isRunning || !scopeConfirmed || !target.trim()) {
+    if (isRunning || !target.trim()) {
       return;
     }
     setIsRunning(true);
@@ -3229,7 +3195,6 @@ function RemoteMeasurementPage({ locale }: { locale: Locale }) {
             target: target.trim(),
             location: location.trim(),
             limit: Math.max(1, Math.min(3, Number.parseInt(limit, 10) || 1)),
-            scope_confirmed: scopeConfirmed,
             token: token.trim() || null,
           },
         }),
@@ -3292,24 +3257,15 @@ function RemoteMeasurementPage({ locale }: { locale: Locale }) {
         </label>
       </div>
 
-      <label className="scopeConfirmation remoteScopeConfirmation">
-        <input type="checkbox" checked={scopeConfirmed} onChange={(event) => setScopeConfirmed(event.target.checked)} disabled={isRunning} />
-        <span>
-          {locale === "vi"
-            ? "Tôi được phép gửi mục tiêu public này tới Globalping để đo từ xa."
-            : "I am authorized to send this public target to Globalping for remote measurement."}
-        </span>
-      </label>
-
       <div className="remoteExecutionActions">
-        <button className="primaryButton" onClick={() => void runMeasurement()} disabled={!scopeConfirmed || !target.trim() || isRunning}>
+        <button className="primaryButton" onClick={() => void runMeasurement()} disabled={!target.trim() || isRunning}>
           <Globe2 size={15} />
           <span>{isRunning ? (locale === "vi" ? "Đang đo..." : "Measuring...") : (locale === "vi" ? "Đo từ xa" : "Run remote measurement")}</span>
         </button>
         <small>
           {locale === "vi"
-            ? "Token chỉ nằm trong bộ nhớ của trang và không được lưu."
-            : "The token stays in page memory and is not persisted."}
+            ? "Khi chạy, mục tiêu public được gửi tới Globalping; token chỉ nằm trong bộ nhớ và không được lưu."
+            : "Running sends the public target to Globalping; the token stays in memory and is not persisted."}
         </small>
       </div>
 
@@ -3328,7 +3284,6 @@ function RemotePortCheckPanel({
   target: string;
   port: string;
 }) {
-  const [scopeConfirmed, setScopeConfirmed] = useState(false);
   const [maxNodes, setMaxNodes] = useState("3");
   const [isRunning, setIsRunning] = useState(false);
   const [result, setResult] = useState<RemotePortCheckResult | null>(null);
@@ -3337,13 +3292,12 @@ function RemotePortCheckPanel({
   const validPort = parsedPort >= 1 && parsedPort <= 65535;
 
   useEffect(() => {
-    setScopeConfirmed(false);
     setResult(null);
     setError(null);
   }, [target, port]);
 
   async function runPortCheck() {
-    if (!scopeConfirmed || !target.trim() || !validPort || isRunning) {
+    if (!target.trim() || !validPort || isRunning) {
       return;
     }
     setIsRunning(true);
@@ -3356,7 +3310,6 @@ function RemotePortCheckPanel({
             target: target.trim(),
             port: parsedPort,
             max_nodes: Math.max(1, Math.min(3, Number.parseInt(maxNodes, 10) || 1)),
-            scope_confirmed: scopeConfirmed,
           },
         }),
       );
@@ -3386,15 +3339,7 @@ function RemotePortCheckPanel({
           </select>
         </label>
       </div>
-      <label className="scopeConfirmation remoteScopeConfirmation">
-        <input type="checkbox" checked={scopeConfirmed} onChange={(event) => setScopeConfirmed(event.target.checked)} disabled={isRunning} />
-        <span>
-          {locale === "vi"
-            ? "Tôi sở hữu hoặc được phép kiểm tra cổng public này qua dịch vụ bên thứ ba."
-            : "I own or am authorized to check this public port through a third-party service."}
-        </span>
-      </label>
-      <button className="primaryButton" onClick={() => void runPortCheck()} disabled={!scopeConfirmed || !target.trim() || !validPort || isRunning}>
+      <button className="primaryButton" onClick={() => void runPortCheck()} disabled={!target.trim() || !validPort || isRunning}>
         <ShieldCheck size={15} />
         <span>{isRunning ? (locale === "vi" ? "Đang kiểm tra..." : "Checking...") : (locale === "vi" ? "Kiểm tra từ ngoài" : "Check from outside")}</span>
       </button>
@@ -4249,14 +4194,14 @@ function fallbackManagedTools(): ManagedToolDescriptor[] {
       scope_requirement: "intrusive_target",
       default_enabled: false,
       notes:
-        "Template scanning is never beginner-default and requires explicit scope.",
+        "Template scanning is kept out of beginner defaults and uses bounded profiles.",
       update: {
         source_label: "GitHub: projectdiscovery/nuclei",
         source_url: "https://github.com/projectdiscovery/nuclei",
         latest_url: "https://github.com/projectdiscovery/nuclei/releases/latest",
         update_supported: true,
         update_note:
-          "Update from ProjectDiscovery GitHub releases; running templates still requires explicit scope.",
+          "Update from ProjectDiscovery GitHub releases; run templates with bounded profiles.",
       },
     },
   ];
@@ -4433,11 +4378,11 @@ function scannerIntro(toolId: string, locale: Locale) {
   switch (toolId) {
     case "nmap":
     case "naabu":
-      return vi ? "Quét port có giới hạn trên IP hoặc tên miền được phép." : "Run bounded port discovery on an authorized host or domain.";
+      return vi ? "Quét port có giới hạn trên IP hoặc tên miền đã nhập." : "Run bounded port discovery on the entered host or domain.";
     case "httpx":
       return vi ? "Probe HTTP có giới hạn, status, title và technology." : "Probe HTTP with bounded status, title and technology checks.";
     case "subfinder":
-      return vi ? "Tìm subdomain thụ động cho domain được phép." : "Discover subdomains passively for an authorized domain.";
+      return vi ? "Tìm subdomain thụ động cho domain đã nhập." : "Discover subdomains passively for the entered domain.";
     case "dnsx":
       return vi ? "Resolve DNS có giới hạn cho một số service name phổ biến." : "Resolve a bounded set of common service names.";
     case "trippy":
@@ -4445,9 +4390,9 @@ function scannerIntro(toolId: string, locale: Locale) {
     case "nexttrace":
       return vi ? "Trace route JSON có giới hạn với hop enrichment." : "Produce a bounded JSON route trace with hop enrichment.";
     case "nuclei":
-      return vi ? "Template scan intrusive chỉ chạy với scope rõ ràng." : "Intrusive template scanning requires explicit scope.";
+      return vi ? "Template scan intrusive dùng profile có giới hạn." : "Intrusive template scanning uses bounded profiles.";
     default:
-      return vi ? "Chạy tool ngoài trên mục tiêu được phép." : "Run an external tool on an authorized target.";
+      return vi ? "Chạy tool ngoài trên mục tiêu đã nhập." : "Run an external tool on the entered target.";
   }
 }
 
@@ -4565,8 +4510,8 @@ function toolPageSubtitle(tool: ManagedToolDescriptor, locale: Locale) {
   }
   if (tool.id === "nuclei") {
     return locale === "vi"
-      ? "Nuclei là gói scanner của SonarNwork; app quản lý cài/cập nhật và scan template vẫn cần scope rõ ràng."
-      : "Nuclei is a SonarNwork scanner package; the app manages install/update and template runs still need explicit scope.";
+      ? "Nuclei là gói scanner của SonarNwork; app quản lý cài/cập nhật và chạy template theo profile đã chọn."
+      : "Nuclei is a SonarNwork scanner package; the app manages install, update, and template runs using the selected profile.";
   }
   return tool.notes;
 }
@@ -4579,8 +4524,8 @@ function toolPageDescription(tool: ManagedToolDescriptor, locale: Locale) {
   }
   if (tool.id === "nuclei") {
     return locale === "vi"
-      ? "SonarNwork tải/cập nhật Nuclei vào thư mục app và chỉ chạy template sau khi bạn xác nhận scope."
-      : "SonarNwork installs or updates Nuclei in the app-managed tools folder and only runs templates after scope confirmation.";
+      ? "SonarNwork tải/cập nhật Nuclei vào thư mục app và chạy template ngay theo profile đã chọn."
+      : "SonarNwork installs or updates Nuclei in the app-managed tools folder and runs templates using the selected profile.";
   }
   return tool.notes;
 }

@@ -55,7 +55,6 @@ pub struct CaptureRequest {
     pub interface_id: String,
     pub duration_seconds: u64,
     pub packet_limit: u64,
-    pub scope_confirmed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -102,7 +101,6 @@ pub struct StartMonitorRequest {
     pub interval_seconds: u64,
     pub latency_alert_ms: u64,
     pub loss_alert_percent: u8,
-    pub scope_confirmed: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -552,9 +550,6 @@ pub fn default_app_data_dir() -> PathBuf {
 }
 
 fn validate_capture_request(request: &CaptureRequest) -> Result<(), String> {
-    if !request.scope_confirmed {
-        return Err("confirm that packet capture is authorized on this interface".into());
-    }
     if request.interface_id.trim().is_empty()
         || request.interface_id.trim_start().starts_with('-')
         || request.interface_id.len() > 512
@@ -573,9 +568,6 @@ fn validate_capture_request(request: &CaptureRequest) -> Result<(), String> {
 }
 
 fn validate_monitor_request(request: &StartMonitorRequest) -> Result<(), String> {
-    if !request.scope_confirmed {
-        return Err("confirm that you own or are authorized to monitor this target".into());
-    }
     validate_target(&request.target)?;
     if !(15..=86_400).contains(&request.interval_seconds) {
         return Err("monitor interval must be between 15 and 86400 seconds".into());
@@ -798,7 +790,6 @@ mod tests {
             interface_id: "1".into(),
             duration_seconds: 15,
             packet_limit: 5_000,
-            scope_confirmed: true,
         };
         assert!(validate_capture_request(&request).is_ok());
         request.interface_id = "-i".into();
@@ -806,9 +797,25 @@ mod tests {
     }
 
     #[test]
-    fn monitor_target_rejects_argument_injection() {
-        assert!(validate_target("example.com").is_ok());
-        assert!(validate_target("--help").is_err());
-        assert!(validate_target("example.com extra").is_err());
+    fn validates_bounded_monitor_contract() {
+        let mut request = StartMonitorRequest {
+            target: "example.com".into(),
+            interval_seconds: 60,
+            latency_alert_ms: 500,
+            loss_alert_percent: 20,
+        };
+        assert!(validate_monitor_request(&request).is_ok());
+
+        request.target = "--help".into();
+        assert!(validate_monitor_request(&request).is_err());
+        request.target = "example.com".into();
+        request.interval_seconds = 14;
+        assert!(validate_monitor_request(&request).is_err());
+        request.interval_seconds = 60;
+        request.latency_alert_ms = 0;
+        assert!(validate_monitor_request(&request).is_err());
+        request.latency_alert_ms = 500;
+        request.loss_alert_percent = 101;
+        assert!(validate_monitor_request(&request).is_err());
     }
 }

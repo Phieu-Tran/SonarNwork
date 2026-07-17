@@ -59,7 +59,6 @@ export type InteractionNamespace = {
   description: string;
   group: InteractionGroup;
   action_class: string;
-  requires_scope_confirmation: boolean;
   fields: InteractionField[];
   capabilities: InteractionCapability[];
   examples: string[];

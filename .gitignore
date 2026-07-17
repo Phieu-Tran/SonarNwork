@@ -10,6 +10,8 @@
 /preview-*.png
 /sonarnwork-*.png
 /scripts/gui-e2e/
+/scripts/recon-journey/
+/scripts/tui-e2e/
 
 # Local agent, research, and delivery workflows
 /AGENTS.md
@@ -41,4 +43,5 @@
 
 *.log
 *.tmp
+*.out
 .DS_Store

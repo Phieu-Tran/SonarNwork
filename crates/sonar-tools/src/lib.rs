@@ -359,7 +359,7 @@ impl ToolCatalog {
                     ToolCategory::RemoteVantage,
                     &[ToolCapability::RemoteMeasurement, ToolCapability::PortScan],
                     false,
-                    "Token handoff for explicitly scoped public service checks.",
+                    "Token handoff for public service checks with bounded targets.",
                     ToolUpdateInfo {
                         source_label: "SonarNwork remote-scan".into(),
                         source_url: "sonarnwork://remote-scan".into(),
@@ -377,7 +377,7 @@ impl ToolCatalog {
                     ToolCategory::Web,
                     &[ToolCapability::HttpProbe, ToolCapability::TlsProbe],
                     false,
-                    "Managed web probing behind explicit target scope.",
+                    "Managed web probing with bounded target validation.",
                     github_update(
                         "projectdiscovery/httpx",
                         true,
@@ -393,7 +393,7 @@ impl ToolCatalog {
                     ToolCategory::Dns,
                     &[ToolCapability::DnsLookup],
                     false,
-                    "Bulk DNS resolution for scoped lists.",
+                    "Bulk DNS resolution for target lists.",
                     github_update(
                         "projectdiscovery/dnsx",
                         true,
@@ -425,7 +425,7 @@ impl ToolCatalog {
                     ToolCategory::PortDiscovery,
                     &[ToolCapability::PortScan],
                     false,
-                    "Fast active port discovery, only behind explicit scan scope.",
+                    "Fast active port discovery with bounded scan profiles.",
                     github_update(
                         "projectdiscovery/naabu",
                         true,
@@ -441,11 +441,11 @@ impl ToolCatalog {
                     ToolCategory::VulnScanning,
                     &[ToolCapability::TemplateScan],
                     false,
-                    "Template scanning is never beginner-default and requires explicit scope.",
+                    "Template scanning is never beginner-default and uses bounded profiles.",
                     github_update(
                         "projectdiscovery/nuclei",
                         true,
-                        "Update from ProjectDiscovery GitHub releases; running templates still requires explicit scope.",
+                        "Update from ProjectDiscovery GitHub releases; template execution remains bounded by profile.",
                     ),
                 ),
                 descriptor(
@@ -618,6 +618,28 @@ impl ToolCatalog {
         }
         install_latest_managed_tool(tool_id)?;
         self.runtime_status(tool_id)
+    }
+
+    /// Remove the per-user managed install of a managed-download tool. Only the
+    /// SonarNwork-managed copy is deleted; a separate system/PATH install (if any)
+    /// is left untouched. Returns whether a managed copy was actually removed.
+    pub fn uninstall_managed(&self, tool_id: &str) -> Result<bool> {
+        let descriptor = self
+            .tools
+            .iter()
+            .find(|tool| tool.id == tool_id)
+            .ok_or_else(|| ToolError::NotFound(tool_id.to_string()))?;
+        if !matches!(
+            descriptor.install_strategy,
+            InstallStrategy::ManagedDownload | InstallStrategy::AutoDownload
+        ) {
+            return Err(ToolError::Operation(format!(
+                "{tool_id} is not a managed-download tool; there is no managed copy to remove"
+            )));
+        }
+        let root = managed_tool_root()
+            .ok_or_else(|| ToolError::Operation("LOCALAPPDATA is unavailable".into()))?;
+        remove_managed_tool(tool_id, &root)
     }
 
     pub fn update_plan(&self, tool_id: &str) -> Result<ToolUpdatePlan> {
@@ -828,7 +850,9 @@ fn version_output_matches(tool_id: &str, output: &str) -> bool {
     let lower = output.to_ascii_lowercase();
     match tool_id {
         "nmap" => lower.contains("nmap version"),
-        "trippy" => lower.contains("trippy"),
+        // Trippy's binary is `trip`; `trip --version` prints "trip <ver>", which
+        // does not contain the string "trippy".
+        "trippy" => lower.contains("trip"),
         "nexttrace" => lower.contains("nexttrace"),
         "nuclei" | "httpx" | "naabu" | "subfinder" | "dnsx" => lower.contains("current version"),
         _ => false,
@@ -908,11 +932,45 @@ struct GithubAsset {
     browser_download_url: String,
 }
 
+/// A managed release asset that has already been downloaded into memory.
+struct DownloadedAsset {
+    name: String,
+    bytes: Vec<u8>,
+}
+
+/// Full production install path: fetch the latest release over the network, then
+/// stage/verify/promote it into the per-user managed tool directory.
+///
+/// The work is split into three seams so the file-system half (staging, backup,
+/// promotion, removal) can be exercised by hermetic tests without any network
+/// access or a real executable:
+/// - [`fetch_latest_managed_asset`] performs the network download.
+/// - [`install_downloaded_asset`] performs the pure file-system install and takes
+///   the executable verification step as an injectable closure.
+/// - [`remove_managed_tool`] deletes an installed managed tool.
 fn install_latest_managed_tool(tool_id: &str) -> Result<()> {
     let _guard = MANAGED_INSTALL_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
         .map_err(|_| ToolError::Operation("managed installer lock is poisoned".into()))?;
+    let asset = fetch_latest_managed_asset(tool_id)?;
+    let root = managed_tool_root()
+        .ok_or_else(|| ToolError::Operation("LOCALAPPDATA is unavailable".into()))?;
+    install_downloaded_asset(
+        tool_id,
+        &asset.name,
+        &asset.bytes,
+        &root,
+        verify_managed_executable,
+    )?;
+    Ok(())
+}
+
+/// Download the latest allow-listed Windows release asset for `tool_id`.
+///
+/// This is the only step that touches the network; it is covered by the gated
+/// real-lifecycle integration test rather than the hermetic unit tests.
+fn fetch_latest_managed_asset(tool_id: &str) -> Result<DownloadedAsset> {
     let client = reqwest::blocking::Client::builder()
         .user_agent("SonarNwork/0.1")
         .redirect(reqwest::redirect::Policy::limited(5))
@@ -950,61 +1008,113 @@ fn install_latest_managed_tool(tool_id: &str) -> Result<()> {
         .and_then(reqwest::blocking::Response::error_for_status)
         .map_err(|err| ToolError::Operation(err.to_string()))?
         .bytes()
-        .map_err(|err| ToolError::Operation(err.to_string()))?;
-    let destination = managed_tool_executable(tool_id)
-        .ok_or_else(|| ToolError::Operation("LOCALAPPDATA is unavailable".into()))?;
-    let parent = destination
-        .parent()
-        .ok_or_else(|| ToolError::Operation("invalid managed tool directory".into()))?;
-    fs::create_dir_all(parent).map_err(|err| ToolError::Operation(err.to_string()))?;
-    let staged = parent.join(format!("{tool_id}.exe.pending"));
-    let stage_result = if asset.name.ends_with(".zip") {
-        extract_named_executable(&bytes, managed_archive_executable(tool_id), &staged)
-    } else if bytes.is_empty() || bytes.len() as u64 > MAX_NUCLEI_ARCHIVE_BYTES {
-        Err(ToolError::Operation(format!(
-            "{tool_id} executable size is invalid"
-        )))
-    } else {
-        fs::write(&staged, &bytes).map_err(|err| ToolError::Operation(err.to_string()))
-    };
-    if let Err(err) = stage_result {
-        let _ = fs::remove_file(&staged);
-        return Err(err);
-    }
+        .map_err(|err| ToolError::Operation(err.to_string()))?
+        .to_vec();
+    Ok(DownloadedAsset {
+        name: asset.name,
+        bytes,
+    })
+}
+
+/// Production verification seam: run the staged binary's version command and
+/// confirm it identifies as the expected tool.
+fn verify_managed_executable(tool_id: &str, path: &Path) -> Result<()> {
     let version_args: &[&str] = match tool_id {
         "trippy" | "nexttrace" => &["--version"],
         _ => &["-version"],
     };
-    let version = Command::new(&staged)
+    let output = Command::new(path)
         .args(version_args)
         .output()
         .map_err(|err| ToolError::Operation(err.to_string()))?;
     let combined = format!(
         "{}\n{}",
-        String::from_utf8_lossy(&version.stdout),
-        String::from_utf8_lossy(&version.stderr)
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
     );
-    if !version.status.success() || !version_output_matches(tool_id, &combined) {
-        let _ = fs::remove_file(&staged);
+    if !output.status.success() || !version_output_matches(tool_id, &combined) {
         return Err(ToolError::Operation(format!(
             "downloaded {tool_id} failed its version check"
         )));
     }
+    Ok(())
+}
+
+/// Install an already-downloaded asset into `root` (the managed tools directory,
+/// i.e. `root/<tool_id>/<tool_id>.exe`). Pure file-system work; `verify` decides
+/// whether the staged binary is acceptable before it is promoted into place.
+///
+/// On any failure the staged file is removed; when replacing an existing install,
+/// a failed promotion restores the previous binary.
+fn install_downloaded_asset<F>(
+    tool_id: &str,
+    asset_name: &str,
+    bytes: &[u8],
+    root: &Path,
+    verify: F,
+) -> Result<PathBuf>
+where
+    F: Fn(&str, &Path) -> Result<()>,
+{
+    let destination = root.join(tool_id).join(format!("{tool_id}.exe"));
+    let parent = destination
+        .parent()
+        .ok_or_else(|| ToolError::Operation("invalid managed tool directory".into()))?;
+    fs::create_dir_all(parent).map_err(|err| ToolError::Operation(err.to_string()))?;
+    let staged = parent.join(format!("{tool_id}.exe.pending"));
+    let stage_result = if asset_name.ends_with(".zip") {
+        extract_named_executable(bytes, managed_archive_executable(tool_id), &staged)
+    } else if bytes.is_empty() || bytes.len() as u64 > MAX_NUCLEI_ARCHIVE_BYTES {
+        Err(ToolError::Operation(format!(
+            "{tool_id} executable size is invalid"
+        )))
+    } else {
+        fs::write(&staged, bytes).map_err(|err| ToolError::Operation(err.to_string()))
+    };
+    if let Err(err) = stage_result {
+        let _ = fs::remove_file(&staged);
+        return Err(err);
+    }
+    if let Err(err) = verify(tool_id, &staged) {
+        let _ = fs::remove_file(&staged);
+        return Err(err);
+    }
+    promote_staged(tool_id, &staged, &destination)?;
+    Ok(destination)
+}
+
+/// Atomically move the verified staged binary into `destination`, backing up and
+/// restoring any previous install if the rename fails.
+fn promote_staged(tool_id: &str, staged: &Path, destination: &Path) -> Result<()> {
+    let parent = destination
+        .parent()
+        .ok_or_else(|| ToolError::Operation("invalid managed tool directory".into()))?;
     let backup = parent.join(format!("{tool_id}.exe.previous"));
     let had_previous = destination.exists();
     if had_previous {
         let _ = fs::remove_file(&backup);
-        fs::rename(&destination, &backup).map_err(|err| ToolError::Operation(err.to_string()))?;
+        fs::rename(destination, &backup).map_err(|err| ToolError::Operation(err.to_string()))?;
     }
-    if let Err(err) = fs::rename(&staged, &destination) {
+    if let Err(err) = fs::rename(staged, destination) {
         if had_previous {
-            let _ = fs::rename(&backup, &destination);
+            let _ = fs::rename(&backup, destination);
         }
-        let _ = fs::remove_file(&staged);
+        let _ = fs::remove_file(staged);
         return Err(ToolError::Operation(err.to_string()));
     }
     let _ = fs::remove_file(backup);
     Ok(())
+}
+
+/// Delete the managed install of `tool_id` under `root`. Returns whether anything
+/// was removed; removing a tool that is not installed is a no-op success.
+fn remove_managed_tool(tool_id: &str, root: &Path) -> Result<bool> {
+    let dir = root.join(tool_id);
+    if !dir.exists() {
+        return Ok(false);
+    }
+    fs::remove_dir_all(&dir).map_err(|err| ToolError::Operation(err.to_string()))?;
+    Ok(true)
 }
 
 fn managed_tool_repository(tool_id: &str) -> Option<&'static str> {
@@ -1051,9 +1161,23 @@ fn extract_single_executable(bytes: &[u8], destination: &Path) -> Result<()> {
 fn extract_named_executable(bytes: &[u8], executable: &str, destination: &Path) -> Result<()> {
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|err| ToolError::Operation(err.to_string()))?;
+    // Some official release archives (e.g. Trippy's msvc zip) nest the binary in a
+    // single versioned directory rather than placing it at the archive root, so
+    // match the entry by its file name instead of requiring an exact path.
+    let index = (0..archive.len()).find(|&i| {
+        archive
+            .by_index(i)
+            .map(|entry| archive_entry_matches(entry.name(), executable))
+            .unwrap_or(false)
+    });
+    let Some(index) = index else {
+        return Err(ToolError::Operation(format!(
+            "archive does not contain {executable}"
+        )));
+    };
     let mut entry = archive
-        .by_name(executable)
-        .map_err(|_| ToolError::Operation(format!("archive does not contain {executable}")))?;
+        .by_index(index)
+        .map_err(|err| ToolError::Operation(err.to_string()))?;
     if entry.size() == 0 || entry.size() > MAX_NUCLEI_ARCHIVE_BYTES {
         return Err(ToolError::Operation(format!(
             "{executable} size is invalid"
@@ -1063,6 +1187,14 @@ fn extract_named_executable(bytes: &[u8], executable: &str, destination: &Path) 
         fs::File::create(destination).map_err(|err| ToolError::Operation(err.to_string()))?;
     io::copy(&mut entry, &mut file).map_err(|err| ToolError::Operation(err.to_string()))?;
     Ok(())
+}
+
+/// Whether a zip entry path is the wanted executable, either at the archive root
+/// or nested one or more directories deep. Directory separators are normalized so
+/// both `/` and `\` archives match.
+fn archive_entry_matches(entry_name: &str, executable: &str) -> bool {
+    let normalized = entry_name.replace('\\', "/");
+    normalized == executable || normalized.rsplit('/').next() == Some(executable)
 }
 
 fn github_update(repo: &str, update_supported: bool, update_note: &str) -> ToolUpdateInfo {
@@ -1285,7 +1417,6 @@ mod tests {
             .capabilities
             .contains(&InteractionCapability::Install));
         assert!(!nuclei.fields.iter().any(|field| field.id == "ports"));
-        assert!(nuclei.requires_scope_confirmation);
     }
 
     #[test]
@@ -1390,5 +1521,252 @@ mod tests {
         extract_single_executable(&valid_bytes, &temp).unwrap();
         assert_eq!(fs::read(&temp).unwrap(), b"MZ-test");
         let _ = fs::remove_file(temp);
+    }
+
+    // ---- Simulated managed-tool lifecycle (download → install → remove) --------
+    //
+    // These are hermetic: they never touch the network and never execute a real
+    // binary. The download is simulated with in-memory bytes/zip, and the binary
+    // verification step is injected, so the full staging/backup/promote/delete
+    // file-system flow runs against a private temp directory.
+
+    /// A verifier that always accepts the staged binary (stands in for a real
+    /// successful `-version` check).
+    fn accept_binary(_tool: &str, _path: &Path) -> Result<()> {
+        Ok(())
+    }
+
+    /// Build an in-memory zip archive containing a single entry, mirroring how the
+    /// ProjectDiscovery / trippy Windows release archives are shaped.
+    fn zip_with(entry: &str, contents: &[u8]) -> Vec<u8> {
+        let mut archive = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        archive
+            .start_file(entry, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(contents).unwrap();
+        archive.finish().unwrap().into_inner()
+    }
+
+    /// A unique, isolated temp directory acting as the managed tools root.
+    fn unique_temp_root(tag: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!(
+            "sonarnwork-managed-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    /// Shape the simulated release asset (name + bytes) the way GitHub ships it
+    /// for each managed tool, so the install path picks the right stage strategy.
+    fn simulated_asset(tool_id: &str, contents: &[u8]) -> (String, Vec<u8>) {
+        match tool_id {
+            // NextTrace ships a bare .exe asset, not a zip.
+            "nexttrace" => ("nexttrace_windows_amd64.exe".to_string(), contents.to_vec()),
+            // Trippy ships an msvc zip whose entry is `trip.exe`.
+            "trippy" => (
+                "trippy-0.13.0-x86_64-pc-windows-msvc.zip".to_string(),
+                zip_with(managed_archive_executable(tool_id), contents),
+            ),
+            // ProjectDiscovery tools ship `<tool>_<ver>_windows_amd64.zip`.
+            _ => (
+                format!("{tool_id}_1.0.0_windows_amd64.zip"),
+                zip_with(managed_archive_executable(tool_id), contents),
+            ),
+        }
+    }
+
+    #[test]
+    fn simulated_lifecycle_covers_every_managed_download_tool() {
+        for tool in [
+            "nuclei",
+            "httpx",
+            "naabu",
+            "subfinder",
+            "dnsx",
+            "trippy",
+            "nexttrace",
+        ] {
+            let root = unique_temp_root(&format!("all-{tool}"));
+            let (asset_name, bytes) = simulated_asset(tool, b"MZ-simulated-binary");
+
+            // Download + install.
+            let destination =
+                install_downloaded_asset(tool, &asset_name, &bytes, &root, accept_binary)
+                    .unwrap_or_else(|err| panic!("{tool} install should succeed: {err}"));
+            assert!(destination.exists(), "{tool} must be installed on disk");
+            assert!(
+                destination.ends_with(Path::new(&format!("{tool}/{tool}.exe"))),
+                "{tool} must install to <root>/{tool}/{tool}.exe, got {}",
+                destination.display()
+            );
+            assert_eq!(fs::read(&destination).unwrap(), b"MZ-simulated-binary");
+
+            // Delete.
+            assert!(
+                remove_managed_tool(tool, &root).unwrap(),
+                "{tool} removal must report a deleted copy"
+            );
+            assert!(!destination.exists(), "{tool} binary must be gone");
+            assert!(!root.join(tool).exists(), "{tool} directory must be gone");
+            // Removing again is an idempotent no-op.
+            assert!(!remove_managed_tool(tool, &root).unwrap());
+
+            fs::remove_dir_all(&root).ok();
+        }
+    }
+
+    #[test]
+    fn simulated_upgrade_replaces_binary_without_leaving_scratch_files() {
+        let root = unique_temp_root("upgrade");
+        let (name_v1, v1) = simulated_asset("nuclei", b"MZ-v1");
+        let destination =
+            install_downloaded_asset("nuclei", &name_v1, &v1, &root, accept_binary).unwrap();
+        assert_eq!(fs::read(&destination).unwrap(), b"MZ-v1");
+
+        let (name_v2, v2) = simulated_asset("nuclei", b"MZ-v2-upgraded");
+        let upgraded =
+            install_downloaded_asset("nuclei", &name_v2, &v2, &root, accept_binary).unwrap();
+        assert_eq!(fs::read(&upgraded).unwrap(), b"MZ-v2-upgraded");
+
+        let parent = upgraded.parent().unwrap();
+        assert!(
+            !parent.join("nuclei.exe.previous").exists(),
+            "backup must be cleaned up after a successful upgrade"
+        );
+        assert!(
+            !parent.join("nuclei.exe.pending").exists(),
+            "staging file must be cleaned up after a successful upgrade"
+        );
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn simulated_install_rejecting_binary_leaves_no_partial_files() {
+        let root = unique_temp_root("verify-fail");
+        let reject = |tool: &str, _path: &Path| -> Result<()> {
+            Err(ToolError::Operation(format!(
+                "downloaded {tool} failed its version check"
+            )))
+        };
+        let (asset_name, bytes) = simulated_asset("httpx", b"MZ-fake");
+
+        let error =
+            install_downloaded_asset("httpx", &asset_name, &bytes, &root, reject).unwrap_err();
+        assert!(error.to_string().contains("version check"));
+
+        assert!(!root.join("httpx").join("httpx.exe").exists());
+        assert!(!root.join("httpx").join("httpx.exe.pending").exists());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn simulated_failed_upgrade_keeps_the_previous_binary_intact() {
+        let root = unique_temp_root("failed-upgrade");
+        let (name_v1, v1) = simulated_asset("dnsx", b"MZ-good-v1");
+        let destination =
+            install_downloaded_asset("dnsx", &name_v1, &v1, &root, accept_binary).unwrap();
+
+        let reject = |tool: &str, _path: &Path| -> Result<()> {
+            Err(ToolError::Operation(format!("{tool} rejected")))
+        };
+        let (name_v2, v2) = simulated_asset("dnsx", b"MZ-bad-v2");
+        let error = install_downloaded_asset("dnsx", &name_v2, &v2, &root, reject).unwrap_err();
+        assert!(error.to_string().contains("rejected"));
+
+        // The verified v1 binary is never touched when the replacement is rejected.
+        assert_eq!(fs::read(&destination).unwrap(), b"MZ-good-v1");
+        assert!(!destination
+            .parent()
+            .unwrap()
+            .join("dnsx.exe.pending")
+            .exists());
+
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn simulated_install_rejects_empty_raw_binary() {
+        let root = unique_temp_root("empty-raw");
+        let error =
+            install_downloaded_asset("nexttrace", "nexttrace_windows_amd64.exe", b"", &root, accept_binary)
+                .unwrap_err();
+        assert!(error.to_string().contains("invalid"));
+        assert!(!root.join("nexttrace").join("nexttrace.exe").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn simulated_install_rejects_zip_missing_the_expected_executable() {
+        let root = unique_temp_root("wrong-zip");
+        // A zip that contains some other file, not the tool executable.
+        let bytes = zip_with("README.txt", b"not the binary");
+        let error = install_downloaded_asset(
+            "nuclei",
+            "nuclei_1.0.0_windows_amd64.zip",
+            &bytes,
+            &root,
+            accept_binary,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("does not contain nuclei.exe"));
+        assert!(!root.join("nuclei").join("nuclei.exe").exists());
+        assert!(!root.join("nuclei").join("nuclei.exe.pending").exists());
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn simulated_install_extracts_binary_nested_in_a_versioned_dir() {
+        // Trippy's official Windows zip nests `trip.exe` under a versioned folder
+        // rather than at the archive root; installation must still find it.
+        let root = unique_temp_root("nested-zip");
+        let bytes = zip_with(
+            "trippy-0.13.0-x86_64-pc-windows-msvc/trip.exe",
+            b"MZ-nested-trip",
+        );
+        let destination = install_downloaded_asset(
+            "trippy",
+            "trippy-0.13.0-x86_64-pc-windows-msvc.zip",
+            &bytes,
+            &root,
+            accept_binary,
+        )
+        .unwrap();
+        assert!(destination.ends_with(Path::new("trippy/trippy.exe")));
+        assert_eq!(fs::read(&destination).unwrap(), b"MZ-nested-trip");
+        fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn archive_entry_matches_root_and_nested_paths() {
+        assert!(archive_entry_matches("trip.exe", "trip.exe"));
+        assert!(archive_entry_matches("trippy-0.13.0/trip.exe", "trip.exe"));
+        assert!(archive_entry_matches(
+            "trippy-0.13.0\\bin\\trip.exe",
+            "trip.exe"
+        ));
+        assert!(!archive_entry_matches("nottrip.exe", "trip.exe"));
+        assert!(!archive_entry_matches("dir/README.txt", "trip.exe"));
+    }
+
+    #[test]
+    fn uninstall_managed_rejects_non_managed_tools() {
+        let catalog = ToolCatalog::phase_zero_defaults();
+        // nmap is a system-installer handoff, globalping is API-only: neither has
+        // a managed copy that SonarNwork may delete.
+        let nmap = catalog.uninstall_managed("nmap").unwrap_err();
+        assert!(nmap.to_string().contains("not a managed-download tool"));
+        let globalping = catalog.uninstall_managed("globalping").unwrap_err();
+        assert!(globalping.to_string().contains("not a managed-download tool"));
+        assert!(matches!(
+            catalog.uninstall_managed("not-a-tool"),
+            Err(ToolError::NotFound(_))
+        ));
     }
 }

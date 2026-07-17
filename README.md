@@ -63,7 +63,7 @@ verification:
 - Direction and vantage labels explain where a check actually runs.
 - Suggested next steps help turn observations into a troubleshooting path.
 - Raw evidence and command previews remain available when details matter.
-- Scope confirmation keeps potentially sensitive operations intentional.
+- Bounded profiles and risk labels keep potentially sensitive operations visible.
 
 > Only inspect systems that you own or are explicitly authorized to assess.
 
@@ -79,11 +79,17 @@ it is launched from a terminal or selected in the interface.
 | **CLI** | Fast terminal diagnostics, scripting, reproducible commands, and automation |
 
 Running `sonar` without arguments in a real terminal opens the keyboard-first
-TUI. Type `/` to filter workflows, use `Tab`/`Shift-Tab` to move through a
-form, and press `F5` to run or `F6` to stop. Live output follows the newest line
-by default; `PageUp`/`PageDown` inspect earlier output and `End` returns to the
-tail. The transcript is bounded in both lines and memory, with a visible marker
-when older output has been discarded.
+TUI. Type canonical CLI commands directly without the program name, such as
+`ping 1.1.1.1`; `/` or `Ctrl+P` opens the guided workflow browser. The TUI
+redesign introduces an intuitive command-first interface where you can trigger
+scans immediately. For operations involving external scanners, the new bounded
+profiles model uses risk labels (Safe, Medium, High, Critical) to manage
+permissions explicitly, replacing the older scope confirmation prompts.
+
+In a workflow, use `Tab`/`Shift-Tab` to move through the form and press `F5` to run or `F6` to
+stop. Live output follows the newest line by default; `PageUp`/`PageDown` inspect
+earlier output and `End` returns to the tail. The transcript is bounded in both
+lines and memory, with a visible marker when older output has been discarded.
 
 ## Download and install
 
@@ -116,10 +122,10 @@ shown on the release page.
   `SonarNwork-<version>-windows-x64-portable.zip`, extract it to a permanent
   folder, and add that folder to your user `PATH`. It contains `sonar.exe`, the
   compatibility `sonarnwork.exe`, and `sonarnwork-app.exe`, so both the TUI and
-  `/open ui` work without extra configuration.
+  `open ui` work without extra configuration.
 - **Standalone CLI:** download `SonarNwork-CLI-<version>-windows-x64.exe`, put
   it in a folder on `PATH` as `sonar.exe`, then open a new CMD or PowerShell
-  window. To use `/open ui`, also install/download the desktop app or set
+  window. To use `open ui`, also install/download the desktop app or set
   `SONARNWORK_DESKTOP_PATH` to its executable.
 - **Desktop installer:** install the `.msi` or setup `.exe`. A separately
   installed CLI finds the desktop app in the standard SonarNwork locations; use
@@ -163,8 +169,9 @@ sonar --version
 sonar
 ```
 
-Inside the TUI, type `/open ui` and press Enter to launch the desktop app. The
-same action is also available non-interactively as `sonar open ui`.
+Inside the TUI, type `open ui` and press Enter to launch the desktop app. You can
+also press `/` or `Ctrl+P` and choose the **Open desktop app** workflow. The same
+action is available non-interactively as `sonar open ui`.
 
 Every release also includes SHA-256 checksums and a CycloneDX SBOM. Managed
 tools such as Nmap and Nuclei remain optional and are never bundled.
@@ -180,7 +187,8 @@ sonar update
 
 `sonar update` asks for confirmation, then uses Scoop, WinGet, Cargo, the
 SHA-256-verified portable updater, or the Debian package flow according to how
-SonarNwork was installed. In the TUI, choose `/update` and confirm the update.
+SonarNwork was installed. In the TUI, type `update --yes` or choose the Update
+SonarNwork workflow and confirm the update.
 
 ## Try it
 
@@ -212,7 +220,7 @@ CLI exit codes are stable across `--summary`, `--json`, and `--raw` output:
 | `1` | Probe completed but reported an unhealthy result |
 | `2` | Invalid command or input |
 | `3` | Required dependency or external tool is unavailable |
-| `4` | Scope or authorization was denied |
+| `4` | An explicit maintenance confirmation was required |
 | `5` | Timeout, cancellation, or internal operation failure |
 
 Or launch the desktop app in development mode:
