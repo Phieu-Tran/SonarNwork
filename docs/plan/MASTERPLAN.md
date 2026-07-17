@@ -123,8 +123,8 @@ Cột "Mức" = pipeline đề xuất. Cột "Worker" = model ưu tiên khởi �
 
 | ID | Đề (một câu) | Mức | Phụ thuộc | Trạng thái |
 | --- | --- | --- | --- | --- |
-| **C1** | Củng cố contract chung trong `sonar-tools`: dò-runtime → (tùy chọn) cài → preview lệnh → chạy có phạm vi → parse kết quả, đủ test để C2–C6 chỉ việc "điền công cụ" | Full | B1 | ⛔ |
-| **C2** | Nối **httpx** vào contract C1: dò, preview, run có scope, parse output; test tất định (không mạng) khóa parse | Full | C1 | ⛔ |
+| **C1** | Củng cố contract chung trong `sonar-tools`: dò-runtime → (tùy chọn) cài → preview lệnh → chạy có phạm vi → parse kết quả, đủ test để C2–C6 chỉ việc "điền công cụ" | Full | B1 | ✅ |
+| **C2** | Nối **httpx** vào contract C1: dò, preview, run có scope, parse output; test tất định (không mạng) khóa parse | Full | C1 | 📋 |
 | **C3** | Nối **dnsx** vào contract C1 (như C2) | Full | C1 | ⛔ |
 | **C4** | Nối **subfinder** vào contract C1 (như C2) | Full | C1 | ⛔ |
 | **C5** | Nối **naabu** vào contract C1 (như C2) | Full | C1 | ⛔ |
@@ -207,6 +207,7 @@ ACCEPTANCE CRITERIA (điều chỉnh theo phạm vi task), tất cả là lệnh
 
 | Ngày | Task | Kết quả | Ghi chú |
 | --- | --- | --- | --- |
+| 2026-07-17 | C1 | ✅ PASS | 1 vòng orchestrator. Đóng lỗ hổng bảo mật thật: `scanner_invocation` (app-tauri) và `run_scanner_command` (sonar-cli) trước đó chạy scanner ngoài (nmap/nuclei/...) mà KHÔNG hề gọi scope check. Thêm `scanner_scope_gate` dùng chung trong `sonar-tools`, bắt buộc cả 2 call site đi qua trước khi build `CommandInvocation`. cargo test --workspace 202 passed/4 ignored, clippy 0 warning — verify độc lập bởi orchestrator. ⚠️ Worker tự `git commit` trái quy trình (đã báo user, user chọn giữ commit và merge — xem Feedback vòng 1 trong plan). C2-C6 mở khoá. |
 | 2026-07-17 | B2 | ✅ PASS | 1 vòng orchestrator. Thêm unit test cho `update_channel` (5 kênh) + `confirm_update` (2 case) — trước đó chưa có test nào phủ. Xác nhận real `sonar update --check`/`sonar update` in "up to date", exit 0, không mutate (đúng lúc version workspace == release GitHub). cargo test --workspace 199 passed/4 ignored. Report vòng 1 đáng tin ngay, không cần vòng 2 (khác B1). EPIC B hoàn tất. |
 | 2026-07-17 | B1 | ✅ PASS | 3 vòng orchestrator. Vòng 1 TRƯỢT (worker chẩn đoán sai, orchestrator tìm đúng gốc rễ: regex `\\s` escape sai trong install.ps1). Vòng 2 BLOCKED đúng cách (tìm thêm bug `$installRoot = $null` ghi đè tham số `-InstallRoot`, worker dừng thay vì cài liều vào path thật). Vòng 3 sửa đúng cả 3 dòng bug nhưng bằng chứng PATH before/after bị thiếu trên đĩa — orchestrator tự chạy lại toàn bộ acceptance criteria độc lập (không qua worker) để xác nhận ĐẠT thật. Không phát hành, không push. |
 | 2026-07-17 | EPIC A | MERGED | `work/a4-cleanup-docs` merge --no-ff về `main` (2 commit: sản phẩm+docs, orchestrator scaffolding). Xác minh lại trên main: cargo test --workspace 185 passed/4 ignored, working tree sạch. Chưa push remote. |
