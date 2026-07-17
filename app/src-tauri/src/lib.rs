@@ -131,6 +131,7 @@ fn scanner_invocation(
     scan_ports: Option<String>,
 ) -> Result<(ExternalScannerKind, CommandInvocation), String> {
     let kind = scanner_kind(tool_id)?;
+    let core = app_core_for_target(target)?;
     let runtime = ToolCatalog::phase_zero_defaults()
         .runtime_status(tool_id)
         .map_err(|err| err.to_string())?;
@@ -143,12 +144,20 @@ fn scanner_invocation(
         .executable
         .ok_or_else(|| format!("{tool_id} executable path is unavailable"))?;
     let target_arg = scanner_cli_target(target)?;
-    let profile = ExternalScannerProfile::new(kind, target_arg)
-        .map_err(|err| err.to_string())?
-        .with_mode(scanner_mode(kind, scan_profile.as_deref())?)
-        .with_ports(scanner_ports(kind, scan_ports.as_deref())?)
-        .map_err(|err| err.to_string())?;
-    Ok((kind, profile.invocation(&executable)))
+    let invocation = sonar_tools::scanner_scope_gate(&core, kind, target, || {
+        let mode = scanner_mode(kind, scan_profile.as_deref())
+            .map_err(sonar_core::SonarError::CommandFailed)?;
+        let ports = scanner_ports(kind, scan_ports.as_deref())
+            .map_err(sonar_core::SonarError::CommandFailed)?;
+        let profile = ExternalScannerProfile::new(kind, target_arg)
+            .map_err(|err| sonar_core::SonarError::CommandFailed(err.to_string()))?
+            .with_mode(mode)
+            .with_ports(ports)
+            .map_err(|err| sonar_core::SonarError::CommandFailed(err.to_string()))?;
+        Ok::<_, sonar_core::SonarError>(profile.invocation(&executable))
+    })
+    .map_err(|err| err.to_string())?;
+    Ok((kind, invocation))
 }
 
 fn scanner_cli_invocation(

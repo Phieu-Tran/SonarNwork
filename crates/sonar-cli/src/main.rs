@@ -1684,21 +1684,29 @@ fn run_scanner_command(
     let mode = scanner_profile_for_tool(kind, profile)?;
     let port_spec = scanner_ports_for_tool(kind, ports)?;
     ensure_scanner_mode_matches_kind(kind, mode)?;
-    let profile = ExternalScannerProfile::new(kind, target.clone())?
-        .with_mode(mode)
-        .with_ports(port_spec)?;
-    let runtime = ToolCatalog::phase_zero_defaults().runtime_status(tool_id)?;
-    anyhow::ensure!(
-        runtime.available,
-        "{}",
-        runtime
-            .error
-            .unwrap_or_else(|| format!("{tool_id} is not installed"))
-    );
-    let executable = runtime
-        .executable
-        .with_context(|| format!("{tool_id} executable path is unavailable"))?;
-    let invocation = profile.invocation(&executable);
+
+    let probe_target = ProbeTarget::Input(target.clone());
+    let core = AppCore::for_explicit_target(&probe_target)?;
+    let invocation = sonar_tools::scanner_scope_gate(&core, kind, &probe_target, || {
+        let scanner_profile = ExternalScannerProfile::new(kind, target.clone())
+            .map_err(|e| anyhow::anyhow!("{e}"))?
+            .with_mode(mode)
+            .with_ports(port_spec)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let runtime = ToolCatalog::phase_zero_defaults().runtime_status(tool_id)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        anyhow::ensure!(
+            runtime.available,
+            "{}",
+            runtime
+                .error
+                .unwrap_or_else(|| format!("{tool_id} is not installed"))
+        );
+        let executable = runtime
+            .executable
+            .ok_or_else(|| anyhow::anyhow!("{tool_id} executable path is unavailable"))?;
+        Ok::<_, anyhow::Error>(scanner_profile.invocation(&executable))
+    })?;
     let command_display = invocation.display();
     let output = std::process::Command::new(&invocation.program)
         .args(&invocation.args)

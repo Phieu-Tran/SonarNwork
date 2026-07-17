@@ -10,8 +10,9 @@ use std::{
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use sonar_core::{
-    core_interaction_catalog, scanner_interaction_namespace, ExternalScannerKind,
-    InteractionCapability, InteractionCatalog, InteractionNamespace,
+    core_interaction_catalog, scanner_interaction_namespace, AppCore, CommandInvocation,
+    ExternalScannerKind, InteractionCapability, InteractionCatalog, InteractionNamespace,
+    ProbeTarget,
 };
 use thiserror::Error;
 
@@ -20,6 +21,30 @@ pub mod operations;
 pub mod remote;
 
 pub type Result<T> = std::result::Result<T, ToolError>;
+
+/// Scope gate for scanner invocations.
+///
+/// This is the single mandatory gate that all scanner call sites must pass through.
+/// It validates that the target is within scope for the scanner's action class
+/// before building/returning a runnable `CommandInvocation`.
+///
+/// Returns the invocation from the closure only if scope allows; otherwise returns
+/// the scope denial error. There is no other path to obtain a `CommandInvocation`
+/// for an external scanner.
+pub fn scanner_scope_gate<F, E>(
+    core: &AppCore,
+    kind: ExternalScannerKind,
+    target: &ProbeTarget,
+    build_invocation: F,
+) -> std::result::Result<CommandInvocation, E>
+where
+    F: FnOnce() -> std::result::Result<CommandInvocation, E>,
+    E: From<sonar_core::error::SonarError>,
+{
+    let action_class = kind.action_class();
+    core.ensure_allowed_for_target(target, action_class).map_err(E::from)?;
+    build_invocation()
+}
 
 const MAX_NUCLEI_ARCHIVE_BYTES: u64 = 350 * 1024 * 1024;
 static MANAGED_INSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -1768,5 +1793,63 @@ mod tests {
             catalog.uninstall_managed("not-a-tool"),
             Err(ToolError::NotFound(_))
         ));
+    }
+
+    #[test]
+    fn scope_gate_blocks_out_of_scope_target() {
+        use sonar_core::{AppCore, ExternalScannerKind, ProbeTarget};
+
+        // Default AppCore has an empty scope — all external targets are denied.
+        let core = AppCore::default();
+        let target = ProbeTarget::Input("1.1.1.1".into());
+        let kind = ExternalScannerKind::Nmap;
+
+        let result: std::result::Result<CommandInvocation, sonar_core::SonarError> =
+            super::scanner_scope_gate(&core, kind, &target, || {
+                panic!("invocation builder must not be called when scope is denied");
+            });
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("scope denied"),
+            "error should mention scope denial: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn scope_gate_allows_target_in_scope() {
+        use sonar_core::{AppCore, ExternalScannerKind, ProbeTarget};
+
+        // For explicit targets, the target is added to the scope policy.
+        let core = AppCore::for_explicit_target(&ProbeTarget::Input("1.1.1.1".into())).unwrap();
+        let target = ProbeTarget::Input("1.1.1.1".into());
+        let kind = ExternalScannerKind::Nmap; // ActiveProbe
+
+        let result: std::result::Result<CommandInvocation, sonar_core::SonarError> =
+            super::scanner_scope_gate(&core, kind, &target, || {
+                Ok(CommandInvocation::from_parts("echo", ["ok"]))
+            });
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().program, "echo");
+    }
+
+    #[test]
+    fn scope_gate_allows_passive_lookup_on_explicit_target() {
+        use sonar_core::{AppCore, ExternalScannerKind, ProbeTarget};
+
+        // For explicit targets, all action classes should be allowed.
+        let core = AppCore::for_explicit_target(&ProbeTarget::Input("1.1.1.1".into())).unwrap();
+        let target = ProbeTarget::Input("1.1.1.1".into());
+        let kind = ExternalScannerKind::Subfinder; // PassiveLookup
+
+        let result: std::result::Result<CommandInvocation, sonar_core::SonarError> =
+            super::scanner_scope_gate(&core, kind, &target, || {
+                Ok(CommandInvocation::from_parts("echo", ["ok"]))
+            });
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().program, "echo");
     }
 }
