@@ -450,13 +450,88 @@ pub fn summarize_scanner_output(
     match kind {
         ExternalScannerKind::Nmap => summarize_nmap(exit_code, stdout, stderr),
         ExternalScannerKind::Nuclei => summarize_nuclei(exit_code, stdout, stderr),
-        ExternalScannerKind::Httpx
-        | ExternalScannerKind::Naabu
+        ExternalScannerKind::Httpx => summarize_httpx(exit_code, stdout, stderr),
+        ExternalScannerKind::Naabu
         | ExternalScannerKind::Subfinder
         | ExternalScannerKind::Dnsx
         | ExternalScannerKind::Trippy
         | ExternalScannerKind::Nexttrace => summarize_json_lines(kind, exit_code, stdout, stderr),
     }
+}
+
+fn summarize_httpx(
+    _exit_code: Option<i32>,
+    stdout: &[String],
+    stderr: &[String],
+) -> ProbeOutput {
+    // Track status-code distribution; 0 means unresolvable/unreachable
+    let mut total = 0usize;
+    let mut by_status: std::collections::BTreeMap<u16, usize> = std::collections::BTreeMap::new();
+    let mut all_tech: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+
+    for line in stdout {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            total += 1;
+            if let Some(code) = value.get("status_code").and_then(|v| v.as_u64()) {
+                *by_status.entry(code as u16).or_insert(0) += 1;
+            }
+            if let Some(tech) = value
+                .get("tech")
+                .or_else(|| value.get("technologies"))
+                .and_then(|v| v.as_array())
+            {
+                for t in tech {
+                    if let Some(s) = t.as_str() {
+                        all_tech.insert(s.to_string());
+                    }
+                }
+            }
+        }
+        // Malformed JSON lines are silently skipped — no panic.
+    }
+
+    let mut rows = vec![SummaryRow::new("Hosts", total.to_string())];
+    for (code, count) in &by_status {
+        rows.push(SummaryRow::new(
+            format!("Status {}", code),
+            count.to_string(),
+        ));
+    }
+    if !all_tech.is_empty() {
+        let mut tech_list: Vec<&str> = all_tech.iter().map(|s| s.as_str()).collect();
+        tech_list.sort_unstable();
+        rows.push(SummaryRow::new("Technologies", tech_list.join(", ")));
+    }
+
+    let summary_line = format!(
+        "httpx parsed {} host(s), {} status code(s), {} technology/technologie(s) detected",
+        total,
+        by_status.len(),
+        all_tech.len(),
+    );
+
+    let mut output = ProbeOutput::with_summary(summary_line);
+    output.summary_rows = rows;
+    if !stderr.is_empty() {
+        output.warnings.push(crate::probe::ProbeWarning {
+            code: "scanner_stderr".into(),
+            message: stderr.join("\n"),
+        });
+    }
+    output.raw = Some(json!({
+        "tool": "httpx",
+        "exit_code": _exit_code,
+        "stdout": stdout,
+        "stderr": stderr,
+        "hosts": total,
+        "status_codes": by_status,
+        "technologies": all_tech,
+    }));
+    output
 }
 
 fn summarize_json_lines(
@@ -785,5 +860,89 @@ mod tests {
         let output = summarize_scanner_output(ExternalScannerKind::Nuclei, Some(0), &stdout, &[]);
         assert!(output.summary.unwrap().contains("2 finding"));
         assert_eq!(output.summary_rows[2].value, "1");
+    }
+
+    #[test]
+    fn summarizes_httpx_multiline_jsonl_output() {
+        let stdout = vec![
+            r#"{"url":"https://a.example.com","status_code":200,"title":"Home","tech":["nginx","PHP"],"webserver":"nginx"}"#.into(),
+            r#"{"url":"https://b.example.com","status_code":403,"title":"","tech":["Apache"],"webserver":"Apache/2.4"}"#.into(),
+            r#"{"url":"https://c.example.com","status_code":200,"title":"API","tech":["nginx"],"webserver":"nginx"}"#.into(),
+        ];
+        let output = summarize_scanner_output(ExternalScannerKind::Httpx, Some(0), &stdout, &[]);
+        // summary must reflect parsed count, not raw line count
+        assert!(output.summary.unwrap().contains("3 host"));
+        // First row = total hosts
+        assert_eq!(output.summary_rows[0].label, "Hosts");
+        assert_eq!(output.summary_rows[0].value, "3");
+        // Status-code distribution
+        assert!(output.summary_rows.iter().any(|r| r.label == "Status 200" && r.value == "2"));
+        assert!(output.summary_rows.iter().any(|r| r.label == "Status 403" && r.value == "1"));
+        // Technologies merged & sorted (ASCII order: uppercase before lowercase)
+        assert!(output.summary_rows.iter().any(|r| r.label == "Technologies" && r.value == "Apache, PHP, nginx"));
+    }
+
+    #[test]
+    fn summarizes_httpx_skips_malformed_json_lines() {
+        let stdout = vec![
+            r#"{"url":"https://ok.example.com","status_code":200,"title":"OK","tech":["nginx"]}"#.into(),
+            "not json at all".into(),
+            "".into(),
+            r#"{"incomplete": true"#.into(),
+            r#"{"url":"https://ok2.example.com","status_code":301,"title":"","tech":[],"webserver":"cloudflare"}"#.into(),
+        ];
+        let output = summarize_scanner_output(ExternalScannerKind::Httpx, Some(0), &stdout, &[]);
+        assert!(output.summary.unwrap().contains("2 host"));
+        assert_eq!(output.summary_rows[0].label, "Hosts");
+        assert_eq!(output.summary_rows[0].value, "2");
+        // 200 from first valid line
+        assert!(output.summary_rows.iter().any(|r| r.label == "Status 200" && r.value == "1"));
+        // 301 from last valid line
+        assert!(output.summary_rows.iter().any(|r| r.label == "Status 301" && r.value == "1"));
+    }
+
+    #[test]
+    fn summarizes_httpx_empty_output() {
+        let stdout: Vec<String> = vec![];
+        let output = summarize_scanner_output(ExternalScannerKind::Httpx, Some(0), &stdout, &[]);
+        assert!(output.summary.unwrap().contains("0 host"));
+        assert_eq!(output.summary_rows[0].label, "Hosts");
+        assert_eq!(output.summary_rows[0].value, "0");
+    }
+
+    #[test]
+    fn httpx_summary_includes_status_code_breakdown() {
+        let input = vec![
+            r#"{"url":"https://a.com","status_code":200}"#.into(),
+            r#"{"url":"https://b.com","status_code":403}"#.into(),
+            r#"{"url":"https://c.com","status_code":403}"#.into(),
+            r#"{"url":"https://d.com","status_code":500}"#.into(),
+            r#"{"url":"https://e.com","status_code":200}"#.into(),
+        ];
+        let output = summarize_scanner_output(ExternalScannerKind::Httpx, Some(0), &input, &[]);
+        assert_eq!(output.summary_rows[0].label, "Hosts");
+        assert_eq!(output.summary_rows[0].value, "5");
+        assert!(output.summary_rows.iter().any(|r| r.label == "Status 200" && r.value == "2"));
+        assert!(output.summary_rows.iter().any(|r| r.label == "Status 403" && r.value == "2"));
+        assert!(output.summary_rows.iter().any(|r| r.label == "Status 500" && r.value == "1"));
+    }
+
+    #[test]
+    fn httpx_output_raw_present_and_contains_expected_fields() {
+        let input = vec![
+            r#"{"url":"https://x.com","status_code":200,"title":"X","tech":["nginx"]}"#.into(),
+            r#"{"url":"https://y.com","status_code":503,"title":"","tech":["apache"]}"#.into(),
+            "".into(),
+            "not json".into(),
+        ];
+        let output = summarize_scanner_output(ExternalScannerKind::Httpx, Some(0), &input, &[]);
+
+        let raw = output.raw.as_ref().expect("output.raw must be Some");
+        assert_eq!(raw["tool"], "httpx");
+        assert_eq!(raw["exit_code"], 0);
+        assert!(raw["stdout"].is_array());
+        assert!(raw["stderr"].is_array());
+        assert_eq!(raw["hosts"], 2);
+        assert_eq!(raw["technologies"], serde_json::json!(["apache", "nginx"]));
     }
 }
