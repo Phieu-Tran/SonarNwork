@@ -443,4 +443,74 @@ mod tests {
         .is_ok());
         assert!(ensure_allowed_asset_url("https://example.com/install.ps1").is_err());
     }
+
+    // -- update_channel tests --
+
+    #[test]
+    fn update_channel_scoop() {
+        let path = Path::new(r"C:\Users\test\scoop\apps\sonarnwork\current\sonar.exe");
+        assert_eq!(update_channel(path), UpdateChannel::Scoop);
+    }
+
+    #[test]
+    fn update_channel_winget() {
+        let path = Path::new(
+            r"C:\Users\test\AppData\Local\Microsoft\WinGet\Packages\phieutran.sonarnwork_1.0.0_x64__abc\sonar.exe",
+        );
+        assert_eq!(update_channel(path), UpdateChannel::Winget);
+    }
+
+    #[test]
+    fn update_channel_cargo() {
+        let path = Path::new(r"C:\Users\test\.cargo\bin\sonar.exe");
+        assert_eq!(update_channel(path), UpdateChannel::Cargo);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn update_channel_windows_portable() {
+        let path = Path::new(r"C:\SonarNwork\sonar.exe");
+        assert_eq!(update_channel(path), UpdateChannel::WindowsPortable);
+    }
+
+    #[test]
+    fn update_channel_unsupported_from_target_debug_or_release() {
+        let debug = Path::new(r"C:\project\target\debug\sonar.exe");
+        assert_eq!(update_channel(debug), UpdateChannel::Unsupported);
+        let release = Path::new(r"C:\project\target\release\sonar.exe");
+        assert_eq!(update_channel(release), UpdateChannel::Unsupported);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn update_channel_debian() {
+        let path = Path::new("/usr/bin/sonar");
+        assert_eq!(update_channel(path), UpdateChannel::Debian);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn update_channel_unsupported_linux_other() {
+        let path = Path::new("/opt/sonar/sonar");
+        assert_eq!(update_channel(path), UpdateChannel::Unsupported);
+    }
+
+    // -- confirm_update tests --
+
+    #[test]
+    fn confirm_update_with_confirmation_returns_ok() {
+        assert!(confirm_update("v9.9.9", true).is_ok());
+    }
+
+    #[test]
+    fn confirm_update_without_confirmation_in_non_tty_returns_err() {
+        // cargo test runs with stdin piped, so is_terminal() returns false.
+        let result = confirm_update("v9.9.9", false);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("rerun with `sonar update --yes`"),
+            "unexpected error message: {msg}"
+        );
+    }
 }
